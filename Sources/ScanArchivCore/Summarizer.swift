@@ -43,8 +43,42 @@ struct GeneratedSummary {
 
 /// Erzeugt Titel und Kurzbeschreibung lokal mit Apple Intelligence (FoundationModels).
 public enum Summarizer {
-    /// Maximale Textlänge für das Modell (Kontextfenster ca. 4k Tokens).
-    static let maxCharacters = 5000
+    /// Maximale Textlänge für das Modell. Titel, Art und Datum stehen fast immer auf den ersten
+    /// Seiten; weniger Text heißt schnellere Antwort.
+    static let maxCharacters = 3000
+
+    static let instructions = """
+        Du archivierst gescannte Dokumente (Briefe, Rechnungen, Verträge, Bescheide). \
+        Der Text stammt aus einer Texterkennung und kann Fehler enthalten. \
+        Antworte immer auf Deutsch und erfinde keine Angaben, die nicht im Text stehen.
+        """
+
+    #if canImport(FoundationModels)
+    /// Vorgewärmte Session für den nächsten Vorschlag (Modell ist dann schon geladen).
+    nonisolated(unsafe) private static var warmSession: AnyObject?
+    private static let lock = NSLock()
+
+    @available(macOS 26, *)
+    private static func takeSession() -> LanguageModelSession {
+        lock.lock(); defer { lock.unlock() }
+        let session = warmSession as? LanguageModelSession
+        warmSession = nil
+        return session ?? LanguageModelSession(instructions: instructions)
+    }
+    #endif
+
+    /// Lädt das Modell vorab, damit der nächste Vorschlag schneller kommt.
+    public static func prewarm() {
+        #if canImport(FoundationModels)
+        if #available(macOS 26, *), isAvailable {
+            lock.lock(); defer { lock.unlock() }
+            guard warmSession == nil else { return }
+            let session = LanguageModelSession(instructions: instructions)
+            session.prewarm()
+            warmSession = session
+        }
+        #endif
+    }
 
     /// nil = verfügbar, sonst deutscher Hinweis, warum nicht.
     public static var unavailableReason: String? {
@@ -76,11 +110,7 @@ public enum Summarizer {
         if let reason = unavailableReason { throw SummarizerError.unavailable(reason) }
         #if canImport(FoundationModels)
         if #available(macOS 26, *) {
-            let session = LanguageModelSession(instructions: """
-                Du archivierst gescannte Dokumente (Briefe, Rechnungen, Verträge, Bescheide). \
-                Der Text stammt aus einer Texterkennung und kann Fehler enthalten. \
-                Antworte immer auf Deutsch und erfinde keine Angaben, die nicht im Text stehen.
-                """)
+            let session = takeSession()
             do {
                 let response = try await session.respond(
                     to: "Dokumenttext:\n\(String(text.prefix(maxCharacters)))",

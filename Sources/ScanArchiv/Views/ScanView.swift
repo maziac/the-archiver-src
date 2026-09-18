@@ -14,7 +14,7 @@ struct ScanView: View {
     private func chooseFiles() {
         let panel = NSOpenPanel()
         panel.title = "Dokumente importieren"
-        panel.message = "PDFs oder Bilder auswählen. Mehrere Dateien werden – nach Namen sortiert – zu einem Dokument zusammengefasst."
+        panel.message = "PDFs oder Bilder auswählen. Jede Datei wird ein eigenes Dokument."
         panel.prompt = "Importieren"
         panel.allowsMultipleSelection = true
         panel.canChooseDirectories = false
@@ -91,7 +91,7 @@ struct ScanView: View {
                 step: "Schritt 1 von 2",
                 icon: "doc.on.doc",
                 title: "Vorderseiten scannen",
-                text: "Lege den Stapel mit den Vorderseiten nach oben in den Einzug, die erste Seite obenauf.\nOder übernimm vorhandene PDFs bzw. Bilder – per Dateiauswahl oder indem du sie hierher ziehst.")
+                text: "Lege den Stapel mit den Vorderseiten nach oben in den Einzug, die erste Seite obenauf.\nOder übernimm vorhandene PDFs bzw. Bilder – per Dateiauswahl oder indem du sie hierher ziehst. Jede Datei wird ein eigenes Dokument.")
             {
                 Button("Dateien importieren …") { chooseFiles() }
                 Button("Vorderseiten scannen") { session.scanFronts() }
@@ -157,7 +157,15 @@ struct ScanView: View {
         case let .processing(message):
             VStack(spacing: 16) {
                 ProgressView()
+                if session.importTotal > 1 {
+                    Text("Datei \(session.importPosition) von \(session.importTotal)\(session.autoSaveRemaining ? " – automatisch" : "")")
+                        .foregroundStyle(.secondary)
+                        .monospacedDigit()
+                }
                 Text(message).font(.title3)
+                if session.autoSaveRemaining {
+                    Button("Automatik stoppen") { session.stopAutoSave() }
+                }
             }
 
         case let .saved(url):
@@ -165,7 +173,7 @@ struct ScanView: View {
                 step: "Fertig",
                 icon: "checkmark.circle",
                 title: "Gespeichert als \(url.lastPathComponent)",
-                text: url.deletingLastPathComponent().path)
+                text: [session.lastSavedName, url.deletingLastPathComponent().path].compactMap { $0 }.joined(separator: "\n"))
             {
                 Button("Im Finder zeigen") { NSWorkspace.shared.activateFileViewerSelecting([url]) }
                 Button("Öffnen") { NSWorkspace.shared.open(url) }
@@ -177,6 +185,9 @@ struct ScanView: View {
             Instruction(step: "Fehler", icon: "xmark.octagon", title: "Das hat nicht geklappt", text: message) {
                 if !session.pages.isEmpty {
                     Button("Zurück zur Vorschau") { session.backToPreview() }
+                }
+                if !session.importQueue.isEmpty {
+                    Button("Nächste Datei") { session.skipFile() }
                 }
                 Button("Neu beginnen") { session.reset() }
                     .keyboardShortcut(.defaultAction)

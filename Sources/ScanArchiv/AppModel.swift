@@ -1,6 +1,7 @@
 import AppKit
 import Foundation
 import Observation
+import PDFKit
 import ScanArchivCore
 
 enum SettingsKey {
@@ -85,8 +86,19 @@ final class AppModel {
 
     func suggestion(forPath path: String) async throws -> DocumentSuggestion {
         guard let index else { throw SummarizerError.failed("Kein Archiv geöffnet.") }
-        let text = try index.fullText(path: path)
-        return try await Summarizer.suggest(for: text)
+        let fallback = try index.fullText(path: path)
+        return try await Summarizer.suggest(for: await Self.suggestionText(path: path, fallback: fallback))
+    }
+
+    /// Text der ersten Seiten (wie beim Scannen) – schneller und für Titel/Datum ausreichend.
+    nonisolated static func suggestionText(path: String, fallback: String) async -> String {
+        await Task.detached(priority: .userInitiated) {
+            guard let pdf = PDFDocument(url: URL(fileURLWithPath: path)), pdf.pageCount > 0 else { return fallback }
+            let text = (0..<min(pdf.pageCount, ScanSession.suggestionPageCount))
+                .compactMap { pdf.page(at: $0)?.string }
+                .joined(separator: "\n\n")
+            return text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? fallback : text
+        }.value
     }
 
     // MARK: Titel für vorhandene Dokumente nachtragen
@@ -117,7 +129,8 @@ final class AppModel {
             for record in records {
                 if Task.isCancelled { break }
                 do {
-                    let suggestion = try await Summarizer.suggest(for: record.text)
+                    let text = await Self.suggestionText(path: record.path, fallback: record.text)
+                    let suggestion = try await Summarizer.suggest(for: text)
                     let fileName = URL(fileURLWithPath: record.path).lastPathComponent
                     let date = suggestion.date ?? Archive.parse(fileName: fileName)?.date ?? Date()
                     try await updateDocument(path: record.path, date: date, title: suggestion.title, summary: suggestion.summary)

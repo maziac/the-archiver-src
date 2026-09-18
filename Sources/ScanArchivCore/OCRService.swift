@@ -14,7 +14,20 @@ public struct OCRLine: Sendable, Equatable {
 }
 
 public enum OCRService {
-    public static func recognize(_ image: CGImage, languages: [String] = ["de-DE", "en-US"]) throws -> [OCRLine] {
+    /// Vision blockiert während der Erkennung und braucht intern selbst Threads. Läuft die OCR direkt
+    /// auf Threads von Swift Concurrency, kann sich der Pool erschöpfen und alles hängt. Deshalb
+    /// laufen alle Erkennungen nacheinander auf einer eigenen Queue.
+    private static let queue = DispatchQueue(label: "de.local.scanarchiv.ocr", qos: .userInitiated)
+
+    public static func recognize(_ image: CGImage, languages: [String] = ["de-DE", "en-US"]) async throws -> [OCRLine] {
+        try await withCheckedThrowingContinuation { continuation in
+            queue.async {
+                continuation.resume(with: Result { try recognizeBlocking(image, languages: languages) })
+            }
+        }
+    }
+
+    private static func recognizeBlocking(_ image: CGImage, languages: [String]) throws -> [OCRLine] {
         let request = VNRecognizeTextRequest()
         request.recognitionLevel = .accurate
         request.recognitionLanguages = languages

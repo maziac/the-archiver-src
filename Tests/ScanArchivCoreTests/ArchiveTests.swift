@@ -58,10 +58,10 @@ struct ArchiveTests {
         #expect(saved.url.lastPathComponent == "2026-09-18_000010_Mietvertrag.pdf")
     }
 
-    @Test func updateMetadataRenamesAndKeepsText() throws {
+    @Test func updateMetadataRenamesAndKeepsText() async throws {
         let archive = try Archive(folder: folder)
         let image = PDFBuilderTests.renderPage("Stromrechnung Oktober")
-        let page = PDFPageInput(image: image, lines: try OCRService.recognize(image))
+        let page = PDFPageInput(image: image, lines: try await OCRService.recognize(image))
         let saved = try archive.save(date: date) { number in
             try PDFBuilder.build(pages: [page], number: number, date: date, dpi: 150)
         }

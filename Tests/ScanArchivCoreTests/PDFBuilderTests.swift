@@ -21,15 +21,16 @@ struct PDFBuilderTests {
         return ctx.makeImage()!
     }
 
-    @Test func ocrFindsText() throws {
-        let lines = try OCRService.recognize(Self.renderPage("Stromrechnung Oktober"))
+    @Test func ocrFindsText() async throws {
+        let lines = try await OCRService.recognize(Self.renderPage("Stromrechnung Oktober"))
         let text = lines.map(\.text).joined(separator: " ")
         #expect(text.contains("Stromrechnung"))
     }
 
-    @Test func pdfIsSearchableAndStamped() throws {
+    @Test func pdfIsSearchableAndStamped() async throws {
         let images = [Self.renderPage("Stromrechnung Oktober"), Self.renderPage("Zahlungsbedingungen")]
-        let pages = try images.map { PDFPageInput(image: $0, lines: try OCRService.recognize($0)) }
+        var pages: [PDFPageInput] = []
+        for image in images { pages.append(PDFPageInput(image: image, lines: try await OCRService.recognize(image))) }
         let data = try PDFBuilder.build(pages: pages, number: 123, date: date, dpi: 150)
 
         let pdf = try #require(PDFDocument(data: data))
@@ -57,14 +58,14 @@ struct PDFBuilderTests {
         #expect(rotated.width == image.width && rotated.height == image.height)
     }
 
-    @Test func renderImportedPDF() throws {
+    @Test func renderImportedPDF() async throws {
         let data = try PDFBuilder.build(pages: [PDFPageInput(image: Self.renderPage("Mietvertrag"), lines: [])], number: 5, date: date, dpi: 150)
         let url = FileManager.default.temporaryDirectory.appendingPathComponent("import-\(UUID().uuidString).pdf")
         try data.write(to: url)
         let images = ImageTools.renderPDF(url, dpi: 150, gray: true)
         #expect(images.count == 1)
         #expect(abs(images[0].width - 1240) <= 1)
-        let text = try OCRService.recognize(images[0]).map(\.text).joined(separator: " ")
+        let text = try await OCRService.recognize(images[0]).map(\.text).joined(separator: " ")
         #expect(text.contains("Mietvertrag"))
     }
 

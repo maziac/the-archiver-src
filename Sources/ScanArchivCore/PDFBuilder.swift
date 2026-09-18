@@ -91,7 +91,7 @@ public enum PDFBuilder {
         return jpeg
     }
 
-    private static func drawInvisibleText(_ lines: [OCRLine], in ctx: CGContext, pageSize: CGSize) {
+    static func drawInvisibleText(_ lines: [OCRLine], in ctx: CGContext, pageSize: CGSize) {
         ctx.saveGState()
         ctx.setTextDrawingMode(.invisible)
         for line in lines where !line.text.isEmpty {
@@ -110,7 +110,7 @@ public enum PDFBuilder {
         ctx.restoreGState()
     }
 
-    private static func drawStamp(_ text: String, in ctx: CGContext, pageSize: CGSize) {
+    static func drawStamp(_ text: String, in ctx: CGContext, pageSize: CGSize) {
         let font = CTFontCreateWithName("Helvetica-Bold" as CFString, 9, nil)
         // Rot, damit er sich vom schwarz-weißen Scan abhebt
         let color = CGColor(red: 0.85, green: 0.05, blue: 0.05, alpha: 1)
@@ -170,23 +170,30 @@ public enum ImageTools {
     /// Rendert alle Seiten eines PDFs als Bitmap (weißer Hintergrund) mit der gegebenen Auflösung.
     public static func renderPDF(_ url: URL, dpi: Double, gray: Bool) -> [CGImage] {
         guard let document = CGPDFDocument(url as CFURL) else { return [] }
+        return (0..<document.numberOfPages).compactMap { renderPDFPage(document, index: $0, dpi: dpi, gray: gray) }
+    }
+
+    /// Rendert eine Seite (Index ab 0) so, wie sie angezeigt wird: Seitendrehung plus `extraRotation` (Uhrzeigersinn).
+    public static func renderPDFPage(_ document: CGPDFDocument, index: Int, dpi: Double, gray: Bool, extraRotation: Int = 0) -> CGImage? {
+        guard let page = document.page(at: index + 1) else { return nil }
+        let rotation = ((Int(page.rotationAngle) + extraRotation) % 360 + 360) % 360
+        let box = page.getBoxRect(.cropBox)
+        let size = rotation % 180 == 0 ? box.size : CGSize(width: box.height, height: box.width)
         let scale = dpi / 72
-        return (1...max(document.numberOfPages, 1)).compactMap { number -> CGImage? in
-            guard let page = document.page(at: number) else { return nil }
-            var size = page.getBoxRect(.cropBox).size
-            if page.rotationAngle % 180 != 0 { size = CGSize(width: size.height, height: size.width) }
-            guard let ctx = CGContext(data: nil, width: Int(size.width * scale), height: Int(size.height * scale),
-                                      bitsPerComponent: 8, bytesPerRow: 0,
-                                      space: gray ? CGColorSpaceCreateDeviceGray() : CGColorSpaceCreateDeviceRGB(),
-                                      bitmapInfo: gray ? CGImageAlphaInfo.none.rawValue : CGImageAlphaInfo.noneSkipLast.rawValue)
-            else { return nil }
-            ctx.setFillColor(CGColor(gray: 1, alpha: 1))
-            ctx.fill(CGRect(x: 0, y: 0, width: ctx.width, height: ctx.height))
-            ctx.scaleBy(x: scale, y: scale)
-            ctx.concatenate(page.getDrawingTransform(.cropBox, rect: CGRect(origin: .zero, size: size), rotate: 0, preserveAspectRatio: true))
-            ctx.drawPDFPage(page)
-            return ctx.makeImage()
-        }
+        guard let ctx = CGContext(data: nil, width: Int(size.width * scale), height: Int(size.height * scale),
+                                  bitsPerComponent: 8, bytesPerRow: 0,
+                                  space: gray ? CGColorSpaceCreateDeviceGray() : CGColorSpaceCreateDeviceRGB(),
+                                  bitmapInfo: gray ? CGImageAlphaInfo.none.rawValue : CGImageAlphaInfo.noneSkipLast.rawValue)
+        else { return nil }
+        ctx.setFillColor(CGColor(gray: 1, alpha: 1))
+        ctx.fill(CGRect(x: 0, y: 0, width: ctx.width, height: ctx.height))
+        ctx.scaleBy(x: scale, y: scale)
+        // Seitenraum → angezeigte Seite (gleiche Abbildung wie beim Überlagern der Textebene)
+        let (toPage, _) = PDFStamper.displayToPage(rotation: rotation, box: box)
+        ctx.concatenate(toPage.inverted())
+        ctx.clip(to: box)
+        ctx.drawPDFPage(page)
+        return ctx.makeImage()
     }
 
     public static func writePNG(_ image: CGImage, to url: URL) throws {

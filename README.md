@@ -35,10 +35,19 @@ Icon neu erzeugen: `swift scripts/make_icon.swift`
    Oben stehen die Vorschläge für Datum, Titel und Beschreibung. Sie sind nach wenigen Sekunden da
    und lassen sich überschreiben. Dann **Speichern**.
 
-**Dateien statt Scan:** „Dateien importieren …“ wählen oder PDFs/Bilder in das Fenster ziehen. Mehrere
-Dateien werden, nach Namen sortiert, zu einem Dokument. PDF-Seiten werden mit der Scan-Auflösung
-gerastert und laufen danach durch dieselbe Verarbeitung wie ein Scan (Texterkennung, Stempel, Vorschläge).
-Die Originaldateien bleiben unverändert.
+**Dateien statt Scan:** „Dateien importieren …“ wählen oder PDFs/Bilder in das Fenster ziehen.
+Jede Datei wird ein eigenes Dokument. Die Dateien erscheinen nacheinander in der Vorschau
+(„Datei 2 von 5“) mit „Speichern & weiter“ und „Überspringen“. **Alle restlichen automatisch speichern**
+übernimmt den Rest ohne Vorschau mit den Vorschlägen. Die Originaldateien bleiben unverändert.
+
+- **PDFs** werden inhaltlich unverändert übernommen: Text, Bilder in Originalauflösung und Farbe, Links
+  und Lesezeichen bleiben erhalten. Hinzu kommen nur der rote Stempel auf Seite 1 und die Metadaten.
+  Seiten, die schon Text enthalten, werden nicht erneut erkannt. Seiten, die nur ein Bild sind, bekommen
+  eine unsichtbare OCR-Textebene über dem Originalbild.
+- **Bilder** werden in voller Auflösung zu einem einseitigen PDF.
+
+Für Titel, Beschreibung und Datum werden nur die **ersten zwei Seiten** verwendet. Der Vorschlag
+startet, sobald diese erkannt sind, die übrigen Seiten werden im Hintergrund erkannt.
 
 Im Archiv lassen sich Datum, Titel und Beschreibung per Rechtsklick → **Bearbeiten …** ändern. Die Datei
 wird dabei umbenannt. Der Stempel auf Seite 1 behält das Datum vom Speichern.

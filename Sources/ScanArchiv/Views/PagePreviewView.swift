@@ -6,16 +6,27 @@ struct PagePreviewView: View {
 
     var body: some View {
         VStack(spacing: 0) {
+            if session.importTotal > 0 {
+                importBar
+                Divider()
+            }
             HStack {
-                Text("\(session.pages.count) Seite(n) in Originalreihenfolge")
+                Text(session.currentFileName == nil ? "\(session.pages.count) Seite(n) in Originalreihenfolge" : "\(session.pages.count) Seite(n)")
                     .font(.headline)
                 Text("Klick auf eine Seite dreht sie um 180°.")
                     .foregroundStyle(.secondary)
                 Spacer()
-                Button("Verwerfen", role: .destructive) { session.reset() }
-                Button("Speichern") { session.save() }
-                    .keyboardShortcut(.defaultAction)
-                    .disabled(session.pages.isEmpty)
+                if session.importQueue.isEmpty {
+                    Button("Verwerfen", role: .destructive) { session.reset() }
+                    Button("Speichern") { session.save() }
+                        .keyboardShortcut(.defaultAction)
+                        .disabled(session.pages.isEmpty)
+                } else {
+                    Button("Überspringen") { session.skipFile() }
+                    Button("Speichern & weiter") { session.save() }
+                        .keyboardShortcut(.defaultAction)
+                        .disabled(session.pages.isEmpty)
+                }
             }
             .padding(10)
             Divider()
@@ -37,6 +48,37 @@ struct PagePreviewView: View {
                 .padding(16)
             }
         }
+    }
+}
+
+extension PagePreviewView {
+    /// Fortschritt beim Import mehrerer Dateien
+    private var importBar: some View {
+        HStack(spacing: 10) {
+            Image(systemName: "doc.on.doc").foregroundStyle(.tint)
+            Text("Datei \(session.importPosition) von \(session.importTotal)")
+                .font(.headline)
+                .monospacedDigit()
+            Text(session.currentFileName ?? "")
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .truncationMode(.middle)
+            if let saved = session.lastSavedName {
+                Label("gespeichert: \(saved)", systemImage: "checkmark.circle.fill")
+                    .foregroundStyle(.green)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+            }
+            Spacer()
+            if !session.importQueue.isEmpty {
+                Button("Alle restlichen automatisch speichern", systemImage: "forward.end") { session.saveAllRemaining() }
+                    .help("Speichert diese und alle weiteren Dateien mit den Vorschlägen für Datum, Titel und Beschreibung – ohne Vorschau.")
+            }
+            Button("Import abbrechen", role: .destructive) { session.reset() }
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 8)
+        .background(.quaternary.opacity(0.5))
     }
 }
 
