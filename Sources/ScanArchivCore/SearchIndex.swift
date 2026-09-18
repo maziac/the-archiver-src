@@ -8,11 +8,15 @@ public struct DocumentRecord: Identifiable, Hashable, Sendable {
     public var date: Date
     public var path: String
     public var pages: Int
+    public var title: String
+    public var summary: String
     /// Textausschnitt; Treffer sind mit \u{1}…\u{2} markiert.
     public var snippet: String
 
     public var url: URL { URL(fileURLWithPath: path) }
     public var fileName: String { url.lastPathComponent }
+    /// Titel oder, falls leer, der Dateiname
+    public var displayTitle: String { title.isEmpty ? fileName : title }
 }
 
 public enum SearchIndexError: LocalizedError {
@@ -26,6 +30,7 @@ public enum SearchIndexError: LocalizedError {
 /// Volltextindex (SQLite FTS5) über alle Archiv-PDFs.
 public final class SearchIndex: @unchecked Sendable {
     public static let fileName = ".scanarchiv-index.sqlite"
+    static let schemaVersion: Int32 = 2
     private var db: OpaquePointer?
     private let lock = NSLock()
     private static let transient = unsafeBitCast(-1, to: sqlite3_destructor_type.self)
@@ -34,23 +39,57 @@ public final class SearchIndex: @unchecked Sendable {
         guard sqlite3_open(url.path, &db) == SQLITE_OK else {
             throw SearchIndexError.sqlite("Datenbank kann nicht geöffnet werden: \(url.path)")
         }
+        // Der Index ist nur ein Cache: bei altem Schema neu anlegen, sync() füllt ihn wieder.
+        if try userVersion() < SearchIndex.schemaVersion {
+            try exec("DROP TABLE IF EXISTS docs")
+            try exec("PRAGMA user_version = \(SearchIndex.schemaVersion)")
+        }
         // number enthält "000123 123", damit auch Suchen ohne führende Nullen treffen.
         try exec("""
             CREATE VIRTUAL TABLE IF NOT EXISTS docs USING fts5(
-                number, date UNINDEXED, path UNINDEXED, pages UNINDEXED, text,
+                number, date UNINDEXED, path UNINDEXED, pages UNINDEXED, title, summary, text,
                 tokenize = 'unicode61 remove_diacritics 2')
             """)
+    }
+
+    private func userVersion() throws -> Int32 {
+        try query("PRAGMA user_version", []) { sqlite3_column_int($0, 0) }.first ?? 0
     }
 
     deinit { sqlite3_close(db) }
 
     // MARK: Schreiben
 
-    public func add(number: Int, date: Date, url: URL, pages: Int, text: String) throws {
+    public func add(number: Int, date: Date, url: URL, pages: Int, text: String, title: String = "", summary: String = "") throws {
         lock.lock(); defer { lock.unlock() }
         try run("DELETE FROM docs WHERE path = ?", [url.path])
-        try run("INSERT INTO docs(number, date, path, pages, text) VALUES (?, ?, ?, ?, ?)",
-                ["\(Archive.formatNumber(number)) \(number)", date.timeIntervalSince1970, url.path, pages, text])
+        try run("INSERT INTO docs(number, date, path, pages, title, summary, text) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                ["\(Archive.formatNumber(number)) \(number)", date.timeIntervalSince1970, url.path, pages, title, summary, text])
+    }
+
+    /// Nach Bearbeiten/Umbenennen: Pfad, Datum, Titel und Beschreibung aktualisieren.
+    public func update(oldPath: String, newURL: URL, date: Date, title: String, summary: String) throws {
+        lock.lock(); defer { lock.unlock() }
+        try run("UPDATE docs SET path = ?, date = ?, title = ?, summary = ? WHERE path = ?",
+                [newURL.path, date.timeIntervalSince1970, title, summary, oldPath])
+    }
+
+    /// Dokumente ohne Titel samt Volltext – für das nachträgliche Erzeugen von Titeln.
+    public func recordsWithoutTitle() throws -> [(path: String, text: String)] {
+        lock.lock(); defer { lock.unlock() }
+        return try query("SELECT path, text FROM docs WHERE title = '' ORDER BY path", []) {
+            (SearchIndex.text($0, 0), SearchIndex.text($0, 1))
+        }
+    }
+
+    public func countWithoutTitle() throws -> Int {
+        lock.lock(); defer { lock.unlock() }
+        return try query("SELECT count(*) FROM docs WHERE title = ''", []) { Int(sqlite3_column_int($0, 0)) }.first ?? 0
+    }
+
+    public func fullText(path: String) throws -> String {
+        lock.lock(); defer { lock.unlock() }
+        return try query("SELECT text FROM docs WHERE path = ?", [path]) { SearchIndex.text($0, 0) }.first ?? ""
     }
 
     /// Nimmt ein vorhandenes PDF (Text via PDFKit) in den Index auf.
@@ -60,7 +99,14 @@ public final class SearchIndex: @unchecked Sendable {
         let date = parsed?.date
             ?? (try? url.resourceValues(forKeys: [.creationDateKey]).creationDate)
             ?? Date()
-        try add(number: parsed?.number ?? 0, date: date, url: url, pages: pdf.pageCount, text: pdf.string ?? "")
+        let attributes = pdf.documentAttributes ?? [:]
+        var title = attributes[PDFDocumentAttribute.titleAttribute] as? String ?? ""
+        var summary = attributes[PDFDocumentAttribute.subjectAttribute] as? String ?? ""
+        // Platzhalter aus Version 1 (Dateistamm als Titel, Stempeltext als Betreff) gelten als leer.
+        if title.wholeMatch(of: #/\d{4}-\d{2}-\d{2}_\d{6,}/#) != nil { title = "" }
+        if summary.hasPrefix("Nr. ") { summary = "" }
+        try add(number: parsed?.number ?? 0, date: date, url: url, pages: pdf.pageCount, text: pdf.string ?? "",
+                title: title, summary: summary)
     }
 
     /// Gleicht den Index mit dem Ordner ab: neue PDFs aufnehmen, gelöschte entfernen.
@@ -97,17 +143,19 @@ public final class SearchIndex: @unchecked Sendable {
                 date: Date(timeIntervalSince1970: sqlite3_column_double(stmt, 1)),
                 path: SearchIndex.text(stmt, 2),
                 pages: Int(sqlite3_column_int(stmt, 3)),
-                snippet: SearchIndex.text(stmt, 4)
+                title: SearchIndex.text(stmt, 4),
+                summary: SearchIndex.text(stmt, 5),
+                snippet: SearchIndex.text(stmt, 6)
                     .replacingOccurrences(of: "\n", with: " "))
         }
         if let match {
             return try self.query("""
-                SELECT number, date, path, pages, snippet(docs, 4, char(1), char(2), '…', 16)
+                SELECT number, date, path, pages, title, summary, snippet(docs, 6, char(1), char(2), '…', 16)
                 FROM docs WHERE docs MATCH ? ORDER BY CAST(substr(number, 1, instr(number, ' ') - 1) AS INTEGER) DESC, path LIMIT ?
                 """, [match, limit], map)
         }
         return try self.query("""
-            SELECT number, date, path, pages, substr(text, 1, 160)
+            SELECT number, date, path, pages, title, summary, substr(text, 1, 160)
             FROM docs ORDER BY CAST(substr(number, 1, instr(number, ' ') - 1) AS INTEGER) DESC, path LIMIT ?
             """, [limit], map)
     }

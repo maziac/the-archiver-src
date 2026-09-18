@@ -7,9 +7,10 @@ Mac-App für beidseitige Dokumente mit einem Scanner, der über den Einzug nur e
 - führt dich durch zwei Durchgänge: Vorderseiten → Stapel wenden → Rückseiten
 - sortiert die Seiten in die Originalreihenfolge (V1, R1, V2, R2, …)
 - Texterkennung mit Apple Vision (Deutsch/Englisch), erzeugt ein durchsuchbares PDF
-- Dateiname `JJJJ-MM-TT_NNNNNN.pdf` mit fortlaufender, eindeutiger Nummer
-- Nummer als Stempel oben rechts auf Seite 1 und in den PDF-Metadaten (Titel, Stichwörter)
-- Archiv-Tab: Stichwortsuche (UND-verknüpft, Präfix, Umlaute egal) oder Nummer; Doppelklick öffnet das PDF
+- schlägt **Datum, Titel und Kurzbeschreibung** vor. Das Datum kommt aus dem Text, Titel und Beschreibung erzeugt Apple Intelligence lokal. Ohne gefundenes Datum gilt das heutige.
+- Dateiname `JJJJ-MM-TT_NNNNNN_Titel.pdf` mit fortlaufender, eindeutiger Nummer
+- Nummer als Stempel oben rechts auf Seite 1 und in den PDF-Metadaten (Stichwörter). Titel und Beschreibung stehen als PDF-Titel und PDF-Betreff im Dokument.
+- Archiv-Tab: Stichwortsuche in Text, Titel und Beschreibung (UND-verknüpft, Präfix, Umlaute egal) oder nach Nummer; Doppelklick öffnet das PDF
 
 ## Bauen & Starten
 
@@ -30,7 +31,18 @@ Icon neu erzeugen: `swift scripts/make_icon.swift`
 2. Stapel aus der Ablage nehmen, **als Ganzes umdrehen** (Reihenfolge nicht ändern) und wieder einlegen,
    dann **Rückseiten scannen** klicken. Bei einseitigen Dokumenten: **Nur einseitig – fertig**.
 3. Vorschau prüfen: Ein Klick dreht eine Seite um 180°, übers Kontextmenü lässt sich eine Seite entfernen.
-   Dann **Speichern**.
+   Oben stehen die Vorschläge für Datum, Titel und Beschreibung. Sie sind nach wenigen Sekunden da
+   und lassen sich überschreiben. Dann **Speichern**.
+
+Im Archiv lassen sich Datum, Titel und Beschreibung per Rechtsklick → **Bearbeiten …** ändern. Die Datei
+wird dabei umbenannt. Der Stempel auf Seite 1 behält das Datum vom Speichern.
+Für Dokumente ohne Titel gibt es oben im Archiv den Button **Titel erzeugen**.
+
+### Apple Intelligence
+
+Die Vorschläge für Titel und Beschreibung brauchen macOS 26 mit eingeschalteter Apple Intelligence
+(Systemeinstellungen → Apple Intelligence & Siri). Der Text verlässt den Mac nicht. Ohne Apple
+Intelligence funktioniert alles andere weiter, und das Datum wird trotzdem aus dem Text erkannt.
 
 Stehen alle Rückseiten auf dem Kopf (Stapel über die kurze Kante gewendet), in den Einstellungen (⌘,)
 **Rückseiten automatisch um 180° drehen** einschalten.
@@ -43,7 +55,7 @@ Archivordner (Standard `~/Documents/ScanArchiv`), Auflösung, Farbe/Graustufen, 
 
 | Datei | Inhalt |
 | --- | --- |
-| `JJJJ-MM-TT_NNNNNN.pdf` | die Dokumente |
+| `JJJJ-MM-TT_NNNNNN_Titel.pdf` | die Dokumente (Titel und Beschreibung auch in den PDF-Metadaten) |
 | `counter.json` | letzte vergebene Nummer |
 | `.scanarchiv-index.sqlite` | Suchindex (SQLite FTS5), jederzeit per „Index neu aufbauen“ wiederherstellbar |
 
@@ -53,7 +65,8 @@ Andere PDFs, die du in den Ordner legst, werden ebenfalls indexiert.
 
 ## Aufbau
 
-- `Sources/ScanArchivCore/`: scannerunabhängige Logik (Seitenreihenfolge, OCR, PDF, Archiv, Suchindex), mit Tests
+- `Sources/ScanArchivCore/`: scannerunabhängige Logik (Seitenreihenfolge, OCR, PDF, Archiv, Suchindex,
+  Datumserkennung `DateExtractor`, Vorschläge `Summarizer`), mit Tests
 - `Sources/ScanArchiv/`: SwiftUI-App und Scannersteuerung (`ScannerService`), Ablauf (`ScanSession`)
 
 Scanner-Diagnose: `log stream --predicate 'subsystem == "de.local.scanarchiv"'`

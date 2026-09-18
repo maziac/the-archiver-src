@@ -6,9 +6,11 @@ struct SearchView: View {
     @State private var query = ""
     @State private var results: [DocumentRecord] = []
     @State private var selection = Set<DocumentRecord.ID>()
+    @State private var sortOrder = [KeyPathComparator(\DocumentRecord.number, order: .reverse)]
+    @State private var editing: DocumentRecord?
     @State private var error: String?
 
-    private static let dateFormat: DateFormatter = {
+    static let dateFormat: DateFormatter = {
         let f = DateFormatter()
         f.locale = Locale(identifier: "de_DE")
         f.dateFormat = "dd.MM.yyyy"
@@ -25,45 +27,119 @@ struct SearchView: View {
                 Text("\(results.count) Dokument(e)")
                     .foregroundStyle(.secondary)
                     .monospacedDigit()
-                Button("Index neu aufbauen") { model.reindex(full: true) }
-                Button("Ordner öffnen") {
-                    if let folder = model.archive?.folder { NSWorkspace.shared.open(folder) }
+                Menu {
+                    Button("Index neu aufbauen") { model.reindex(full: true) }
+                    Button("Archivordner öffnen") {
+                        if let folder = model.archive?.folder { NSWorkspace.shared.open(folder) }
+                    }
+                } label: {
+                    Image(systemName: "ellipsis.circle")
                 }
+                .menuStyle(.borderlessButton)
+                .fixedSize()
             }
             .padding(10)
+            titleBatchBar
             Divider()
             if let error = error ?? model.error {
                 Text(error).foregroundStyle(.red).padding()
             }
-            Table(results, selection: $selection) {
-                TableColumn("Nr.") { Text(Archive.formatNumber($0.number)).monospacedDigit() }
-                    .width(70)
-                TableColumn("Datum") { Text(Self.dateFormat.string(from: $0.date)).monospacedDigit() }
-                    .width(85)
-                TableColumn("Seiten") { Text("\($0.pages)").monospacedDigit() }
-                    .width(50)
-                TableColumn("Inhalt") { Text(highlighted($0.snippet)).lineLimit(2) }
-                TableColumn("Datei") { Text($0.fileName).foregroundStyle(.secondary) }
-                    .width(min: 120, ideal: 160)
-            }
-            .contextMenu(forSelectionType: DocumentRecord.ID.self) { ids in
-                Button("Öffnen") { open(ids) }
-                Button("Im Finder zeigen") {
-                    NSWorkspace.shared.activateFileViewerSelecting(ids.map { URL(fileURLWithPath: $0) })
-                }
-            } primaryAction: { ids in
-                open(ids)  // Doppelklick
-            }
+            table
         }
         .task(id: "\(query)|\(model.revision)|\(model.archive?.folder.path ?? "")") {
             try? await Task.sleep(for: .milliseconds(150))
             guard !Task.isCancelled, let index = model.index else { return }
             do {
-                results = try index.search(query)
+                results = try index.search(query).sorted(using: sortOrder)
                 error = nil
             } catch {
                 self.error = error.localizedDescription
             }
+        }
+        .onChange(of: sortOrder) { _, order in results.sort(using: order) }
+        .sheet(item: $editing) { record in
+            EditDocumentSheet(record: record)
+        }
+    }
+
+    private var table: some View {
+        Table(results, selection: $selection, sortOrder: $sortOrder) {
+            TableColumn("Nr.", value: \.number) { Text(Archive.formatNumber($0.number)).monospacedDigit() }
+                .width(64)
+            TableColumn("Datum", value: \.date) { Text(Self.dateFormat.string(from: $0.date)).monospacedDigit() }
+                .width(80)
+            TableColumn("Dokument") { record in
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(record.displayTitle)
+                        .fontWeight(.semibold)
+                        .lineLimit(1)
+                    if !record.summary.isEmpty {
+                        Text(record.summary)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(2)
+                    }
+                    // Trefferausschnitt bei aktiver Suche; ohne Titel/Beschreibung der Textanfang
+                    if !query.trimmingCharacters(in: .whitespaces).isEmpty || record.summary.isEmpty {
+                        Text(highlighted(record.snippet))
+                            .font(.callout)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(2)
+                    }
+                }
+                .padding(.vertical, 3)
+            }
+            TableColumn("Seiten") { Text("\($0.pages)").monospacedDigit() }
+                .width(44)
+            TableColumn("Datei") { Text($0.fileName).foregroundStyle(.secondary).lineLimit(2) }
+                .width(min: 120, ideal: 180)
+        }
+        .contextMenu(forSelectionType: DocumentRecord.ID.self) { ids in
+            Button("Öffnen") { open(ids) }
+            Button("Bearbeiten …") {
+                if let id = ids.first { editing = results.first { $0.id == id } }
+            }
+            .disabled(ids.count != 1)
+            Button("Im Finder zeigen") {
+                NSWorkspace.shared.activateFileViewerSelecting(ids.map { URL(fileURLWithPath: $0) })
+            }
+        } primaryAction: { ids in
+            open(ids)  // Doppelklick
+        }
+    }
+
+    @ViewBuilder
+    private var titleBatchBar: some View {
+        if let batch = model.titleBatch {
+            HStack {
+                ProgressView(value: Double(batch.done), total: Double(max(batch.total, 1)))
+                    .frame(maxWidth: 240)
+                Text("Titel werden erzeugt: \(batch.done) / \(batch.total)")
+                    .monospacedDigit()
+                Spacer()
+                Button("Abbrechen") { model.cancelTitleBatch() }
+            }
+            .padding(.horizontal, 10)
+            .padding(.bottom, 8)
+        } else if model.missingTitleCount > 0, Summarizer.isAvailable {
+            HStack {
+                Image(systemName: "sparkles").foregroundStyle(.tint)
+                Text("\(model.missingTitleCount) Dokument(e) ohne Titel.")
+                    .foregroundStyle(.secondary)
+                Button("Titel erzeugen") { model.generateMissingTitles() }
+                if let result = model.titleBatchResult {
+                    Text(result).foregroundStyle(.secondary)
+                }
+                Spacer()
+            }
+            .padding(.horizontal, 10)
+            .padding(.bottom, 8)
+        } else if let result = model.titleBatchResult {
+            HStack {
+                Text(result).foregroundStyle(.secondary)
+                Spacer()
+            }
+            .padding(.horizontal, 10)
+            .padding(.bottom, 8)
         }
     }
 
@@ -78,7 +154,7 @@ struct SearchView: View {
         var current = ""
         func flush() {
             var part = AttributedString(current)
-            if bold { part.font = .body.bold(); part.foregroundColor = .accentColor }
+            if bold { part.font = .callout.bold(); part.foregroundColor = .accentColor }
             result += part
             current = ""
         }
@@ -87,5 +163,88 @@ struct SearchView: View {
         }
         flush()
         return result
+    }
+}
+
+/// Datum, Titel und Beschreibung eines archivierten Dokuments bearbeiten.
+private struct EditDocumentSheet: View {
+    let record: DocumentRecord
+    @Environment(AppModel.self) private var model
+    @Environment(\.dismiss) private var dismiss
+    @State private var date: Date
+    @State private var title: String
+    @State private var summary: String
+    @State private var busy = false
+    @State private var message: String?
+
+    init(record: DocumentRecord) {
+        self.record = record
+        _date = State(initialValue: record.date)
+        _title = State(initialValue: record.title)
+        _summary = State(initialValue: record.summary)
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Text("Nr. \(Archive.formatNumber(record.number)) bearbeiten")
+                .font(.headline)
+            Form {
+                DatePicker("Datum", selection: $date, displayedComponents: .date)
+                    .datePickerStyle(.field)
+                TextField("Titel", text: $title)
+                TextField("Beschreibung", text: $summary, axis: .vertical)
+                    .lineLimit(3...6)
+            }
+            if let message {
+                Text(message).font(.caption).foregroundStyle(.orange)
+            }
+            Text("Die Datei wird passend zu Datum und Titel umbenannt. Der Stempel auf Seite 1 bleibt unverändert.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            HStack {
+                if Summarizer.isAvailable {
+                    Button("Neu vorschlagen", systemImage: "sparkles") { suggest() }
+                        .disabled(busy)
+                }
+                if busy { ProgressView().controlSize(.small) }
+                Spacer()
+                Button("Abbrechen", role: .cancel) { dismiss() }
+                    .keyboardShortcut(.cancelAction)
+                Button("Sichern") { save() }
+                    .keyboardShortcut(.defaultAction)
+                    .disabled(busy)
+            }
+        }
+        .padding(20)
+        .frame(width: 520)
+    }
+
+    private func suggest() {
+        busy = true
+        message = nil
+        Task {
+            do {
+                let suggestion = try await model.suggestion(forPath: record.path)
+                title = suggestion.title
+                summary = suggestion.summary
+                if let date = suggestion.date { self.date = date }
+            } catch {
+                message = error.localizedDescription
+            }
+            busy = false
+        }
+    }
+
+    private func save() {
+        busy = true
+        Task {
+            do {
+                try await model.updateDocument(path: record.path, date: date, title: title, summary: summary)
+                dismiss()
+            } catch {
+                message = error.localizedDescription
+                busy = false
+            }
+        }
     }
 }

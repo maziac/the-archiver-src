@@ -37,14 +37,15 @@ public enum PDFBuilder {
     }
 
     /// Baut ein durchsuchbares PDF: Scanbild (JPEG) + unsichtbare OCR-Textebene je Seite,
-    /// sichtbarer Nummernstempel auf Seite 1 und Metadaten (Titel, Keywords).
-    public static func build(pages: [PDFPageInput], number: Int, date: Date, dpi: Double, jpegQuality: Double = 0.7) throws -> Data {
+    /// sichtbarer Nummernstempel auf Seite 1 und Metadaten (Titel, Beschreibung, Keywords).
+    public static func build(pages: [PDFPageInput], number: Int, date: Date, dpi: Double, jpegQuality: Double = 0.7,
+                             title: String = "", summary: String = "") throws -> Data {
         let data = NSMutableData()
         let numberText = Archive.formatNumber(number)
-        let title = Archive.fileName(date: date, number: number).replacingOccurrences(of: ".pdf", with: "")
+        let fallbackTitle = Archive.fileName(date: date, number: number).replacingOccurrences(of: ".pdf", with: "")
         let info: [CFString: Any] = [
-            kCGPDFContextTitle: title,
-            kCGPDFContextSubject: stampText(number: number, date: date),
+            kCGPDFContextTitle: title.isEmpty ? fallbackTitle : title,
+            kCGPDFContextSubject: summary.isEmpty ? stampText(number: number, date: date) : summary,
             kCGPDFContextKeywords: [numberText, "Nr. \(numberText)"] as CFArray,
             kCGPDFContextCreator: "ScanArchiv",
         ]
