@@ -112,6 +112,14 @@ private struct PageThumb: View {
     let page: ScannedPage
     let number: Int
 
+    private var label: String {
+        switch page.kind {
+        case .front: return "Seite \(number) · Vorderseite"
+        case .back: return "Seite \(number) · Rückseite"
+        case .imported: return "Seite \(number)"
+        }
+    }
+
     var body: some View {
         VStack(spacing: 6) {
             Image(nsImage: page.thumbnail)
@@ -122,7 +130,7 @@ private struct PageThumb: View {
                 .background(Color.white)
                 .shadow(radius: 2)
                 .animation(.easeInOut(duration: 0.2), value: page.rotated180)
-            Text("Seite \(number) · \(page.isBack ? "Rückseite" : "Vorderseite")")
+            Text(label)
                 .font(.caption)
                 .foregroundStyle(.secondary)
         }

@@ -9,7 +9,8 @@ Mac-App für beidseitige Dokumente mit einem Scanner, der über den Einzug nur e
 - Texterkennung mit Apple Vision (Deutsch/Englisch), erzeugt ein durchsuchbares PDF
 - schlägt **Datum, Titel und Kurzbeschreibung** vor. Das Datum kommt aus dem Text, Titel und Beschreibung erzeugt Apple Intelligence lokal. Ohne gefundenes Datum gilt das heutige.
 - Dateiname `JJJJ-MM-TT_NNNNNN_Titel.pdf` mit fortlaufender, eindeutiger Nummer
-- Nummer als Stempel oben rechts auf Seite 1 und in den PDF-Metadaten (Stichwörter). Titel und Beschreibung stehen als PDF-Titel und PDF-Betreff im Dokument.
+- alternativ Import vorhandener PDFs oder Bilder über die Dateiauswahl oder per Drag & Drop
+- Nummer als roter Stempel oben rechts auf Seite 1 und in den PDF-Metadaten (Stichwörter). Titel und Beschreibung stehen als PDF-Titel und PDF-Betreff im Dokument.
 - Archiv-Tab: Stichwortsuche in Text, Titel und Beschreibung (UND-verknüpft, Präfix, Umlaute egal) oder nach Nummer; Doppelklick öffnet das PDF
 
 ## Bauen & Starten
@@ -34,8 +35,14 @@ Icon neu erzeugen: `swift scripts/make_icon.swift`
    Oben stehen die Vorschläge für Datum, Titel und Beschreibung. Sie sind nach wenigen Sekunden da
    und lassen sich überschreiben. Dann **Speichern**.
 
+**Dateien statt Scan:** „Dateien importieren …“ wählen oder PDFs/Bilder in das Fenster ziehen. Mehrere
+Dateien werden, nach Namen sortiert, zu einem Dokument. PDF-Seiten werden mit der Scan-Auflösung
+gerastert und laufen danach durch dieselbe Verarbeitung wie ein Scan (Texterkennung, Stempel, Vorschläge).
+Die Originaldateien bleiben unverändert.
+
 Im Archiv lassen sich Datum, Titel und Beschreibung per Rechtsklick → **Bearbeiten …** ändern. Die Datei
 wird dabei umbenannt. Der Stempel auf Seite 1 behält das Datum vom Speichern.
+Fährst du mit der Maus über die Spalte „Dokument“, zeigt ein Tooltip die ganze Beschreibung.
 Für Dokumente ohne Titel gibt es oben im Archiv den Button **Titel erzeugen**.
 
 ### Apple Intelligence

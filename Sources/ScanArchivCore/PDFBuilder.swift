@@ -20,10 +20,13 @@ public enum PDFBuilderError: LocalizedError {
 public struct PDFPageInput {
     public var image: CGImage
     public var lines: [OCRLine]
+    /// Auflösung dieses Bildes; nil = die Auflösung aus `build(dpi:)`
+    public var dpi: Double?
 
-    public init(image: CGImage, lines: [OCRLine]) {
+    public init(image: CGImage, lines: [OCRLine], dpi: Double? = nil) {
         self.image = image
         self.lines = lines
+        self.dpi = dpi
     }
 }
 
@@ -55,7 +58,8 @@ public enum PDFBuilder {
         }
 
         for (index, page) in pages.enumerated() {
-            let size = CGSize(width: Double(page.image.width) / dpi * 72, height: Double(page.image.height) / dpi * 72)
+            let pageDPI = page.dpi ?? dpi
+            let size = CGSize(width: Double(page.image.width) / pageDPI * 72, height: Double(page.image.height) / pageDPI * 72)
             var mediaBox = CGRect(origin: .zero, size: size)
             let pageInfo = [kCGPDFContextMediaBox: Data(bytes: &mediaBox, count: MemoryLayout<CGRect>.size)] as CFDictionary
             ctx.beginPDFPage(pageInfo)
@@ -107,8 +111,9 @@ public enum PDFBuilder {
     }
 
     private static func drawStamp(_ text: String, in ctx: CGContext, pageSize: CGSize) {
-        let font = CTFontCreateWithName("Helvetica" as CFString, 9, nil)
-        let color = CGColor(gray: 0.25, alpha: 1)
+        let font = CTFontCreateWithName("Helvetica-Bold" as CFString, 9, nil)
+        // Rot, damit er sich vom schwarz-weißen Scan abhebt
+        let color = CGColor(red: 0.85, green: 0.05, blue: 0.05, alpha: 1)
         let attributed = NSAttributedString(string: text, attributes: [
             .init(kCTFontAttributeName as String): font,
             .init(kCTForegroundColorAttributeName as String): color,
@@ -121,8 +126,12 @@ public enum PDFBuilder {
 
         ctx.saveGState()
         ctx.setFillColor(CGColor(gray: 1, alpha: 0.85))
-        ctx.fill(CGRect(x: origin.x - padding, y: origin.y - descent - padding,
-                        width: width + 2 * padding, height: ascent + descent + 2 * padding))
+        let box = CGRect(x: origin.x - padding, y: origin.y - descent - padding,
+                         width: width + 2 * padding, height: ascent + descent + 2 * padding)
+        ctx.fill(box)
+        ctx.setStrokeColor(color)
+        ctx.setLineWidth(0.75)
+        ctx.stroke(box)
         ctx.textMatrix = .identity
         ctx.setTextDrawingMode(.fill)
         ctx.textPosition = origin
@@ -145,6 +154,47 @@ public enum ImageTools {
             kCGImageSourceCreateThumbnailWithTransform: true,
         ]
         return CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary)
+    }
+
+    /// Auflösung eines importierten Bildes: aus den Bild-Metadaten, sonst so, dass die Breite
+    /// einer A4-Seite (8,27") entspricht.
+    public static func dpi(of url: URL, width: Int) -> Double {
+        if let source = CGImageSourceCreateWithURL(url as CFURL, nil),
+           let props = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any],
+           let dpi = props[kCGImagePropertyDPIWidth] as? Double, dpi >= 100 {
+            return dpi
+        }
+        return max(Double(width) / 8.27, 72)
+    }
+
+    /// Rendert alle Seiten eines PDFs als Bitmap (weißer Hintergrund) mit der gegebenen Auflösung.
+    public static func renderPDF(_ url: URL, dpi: Double, gray: Bool) -> [CGImage] {
+        guard let document = CGPDFDocument(url as CFURL) else { return [] }
+        let scale = dpi / 72
+        return (1...max(document.numberOfPages, 1)).compactMap { number -> CGImage? in
+            guard let page = document.page(at: number) else { return nil }
+            var size = page.getBoxRect(.cropBox).size
+            if page.rotationAngle % 180 != 0 { size = CGSize(width: size.height, height: size.width) }
+            guard let ctx = CGContext(data: nil, width: Int(size.width * scale), height: Int(size.height * scale),
+                                      bitsPerComponent: 8, bytesPerRow: 0,
+                                      space: gray ? CGColorSpaceCreateDeviceGray() : CGColorSpaceCreateDeviceRGB(),
+                                      bitmapInfo: gray ? CGImageAlphaInfo.none.rawValue : CGImageAlphaInfo.noneSkipLast.rawValue)
+            else { return nil }
+            ctx.setFillColor(CGColor(gray: 1, alpha: 1))
+            ctx.fill(CGRect(x: 0, y: 0, width: ctx.width, height: ctx.height))
+            ctx.scaleBy(x: scale, y: scale)
+            ctx.concatenate(page.getDrawingTransform(.cropBox, rect: CGRect(origin: .zero, size: size), rotate: 0, preserveAspectRatio: true))
+            ctx.drawPDFPage(page)
+            return ctx.makeImage()
+        }
+    }
+
+    public static func writePNG(_ image: CGImage, to url: URL) throws {
+        guard let dest = CGImageDestinationCreateWithURL(url as CFURL, UTType.png.identifier as CFString, 1, nil) else {
+            throw PDFBuilderError.jpegEncodingFailed
+        }
+        CGImageDestinationAddImage(dest, image, nil)
+        guard CGImageDestinationFinalize(dest) else { throw PDFBuilderError.jpegEncodingFailed }
     }
 
     public static func rotated180(_ image: CGImage) -> CGImage {

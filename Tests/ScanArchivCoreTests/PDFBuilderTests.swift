@@ -56,4 +56,21 @@ struct PDFBuilderTests {
         let rotated = ImageTools.rotated180(image)
         #expect(rotated.width == image.width && rotated.height == image.height)
     }
+
+    @Test func renderImportedPDF() throws {
+        let data = try PDFBuilder.build(pages: [PDFPageInput(image: Self.renderPage("Mietvertrag"), lines: [])], number: 5, date: date, dpi: 150)
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("import-\(UUID().uuidString).pdf")
+        try data.write(to: url)
+        let images = ImageTools.renderPDF(url, dpi: 150, gray: true)
+        #expect(images.count == 1)
+        #expect(abs(images[0].width - 1240) <= 1)
+        let text = try OCRService.recognize(images[0]).map(\.text).joined(separator: " ")
+        #expect(text.contains("Mietvertrag"))
+    }
+
+    @Test func perPageDPI() throws {
+        let page = PDFPageInput(image: Self.renderPage("X"), lines: [], dpi: 300)
+        let pdf = try #require(PDFDocument(data: try PDFBuilder.build(pages: [page], number: 1, date: date, dpi: 150)))
+        #expect(abs(pdf.page(at: 0)!.bounds(for: .mediaBox).width - 297.6) < 1)
+    }
 }

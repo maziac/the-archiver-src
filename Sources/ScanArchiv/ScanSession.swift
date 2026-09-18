@@ -2,13 +2,18 @@ import AppKit
 import Foundation
 import Observation
 import ScanArchivCore
+import UniformTypeIdentifiers
 
 struct ScannedPage: Identifiable {
+    enum Kind { case front, back, imported }
+
     let id = UUID()
     let url: URL
-    let isBack: Bool
+    let kind: Kind
     let thumbnail: NSImage
     var rotated180: Bool
+    /// Auflösung des Bildes; nil = Scan-Auflösung aus den Einstellungen
+    var dpi: Double?
 }
 
 /// Führt durch den zweiteiligen Scan: Vorderseiten → wenden → Rückseiten → Vorschau → Speichern.
@@ -228,16 +233,73 @@ final class ScanSession {
 
     private func buildPreview() {
         let rotateBacks = UserDefaults.standard.bool(forKey: SettingsKey.rotateBacks)
-        let frontPages = fronts.map { makePage($0, isBack: false, rotated: false) }
-        let backPages = backs.map { makePage($0, isBack: true, rotated: rotateBacks) }
+        let frontPages = fronts.map { makePage($0, kind: .front, rotated: false) }
+        let backPages = backs.map { makePage($0, kind: .back, rotated: rotateBacks) }
         pages = PageOrder.interleave(fronts: frontPages, backsScannedReversed: backPages)
         phase = .preview
         startAnalysis()
     }
 
-    private func makePage(_ url: URL, isBack: Bool, rotated: Bool) -> ScannedPage {
+    private func makePage(_ url: URL, kind: ScannedPage.Kind, rotated: Bool, dpi: Double? = nil) -> ScannedPage {
         let thumb = ImageTools.thumbnail(url).map { NSImage(cgImage: $0, size: .zero) } ?? NSImage()
-        return ScannedPage(url: url, isBack: isBack, thumbnail: thumb, rotated180: rotated)
+        return ScannedPage(url: url, kind: kind, thumbnail: thumb, rotated180: rotated, dpi: dpi)
+    }
+
+    // MARK: Import aus Dateien
+
+    static let importableTypes: [UTType] = [.pdf, .png, .jpeg, .tiff, .heic, .bmp, .gif]
+
+    /// Liest PDFs und Bilder als Seiten ein (in der gegebenen Reihenfolge) und zeigt die Vorschau.
+    /// PDF-Seiten werden mit der Scan-Auflösung gerastert und laufen dann durch dieselbe
+    /// Verarbeitung wie ein Scan (Texterkennung, Stempel, Vorschläge).
+    func importFiles(_ urls: [URL]) {
+        guard !urls.isEmpty else { return }
+        let dpi = Double(dpi), gray = !color
+        let folder = workFolder.appendingPathComponent("import-\(UUID().uuidString.prefix(6))", isDirectory: true)
+        phase = .processing("Dateien werden eingelesen …")
+        Task {
+            let result = await Task.detached(priority: .userInitiated) { () -> Result<[(URL, Double)], Error> in
+                do {
+                    try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+                    var pages: [(URL, Double)] = []
+                    for url in urls {
+                        let accessing = url.startAccessingSecurityScopedResource()
+                        defer { if accessing { url.stopAccessingSecurityScopedResource() } }
+                        if UTType(filenameExtension: url.pathExtension)?.conforms(to: .pdf) == true {
+                            let images = ImageTools.renderPDF(url, dpi: dpi, gray: gray)
+                            if images.isEmpty { throw ScannerError.scanFailed("\(url.lastPathComponent) konnte nicht gelesen werden.") }
+                            for image in images {
+                                let target = folder.appendingPathComponent(String(format: "%04d.png", pages.count + 1))
+                                try ImageTools.writePNG(image, to: target)
+                                pages.append((target, dpi))
+                            }
+                        } else {
+                            guard let image = ImageTools.load(url) else {
+                                throw ScannerError.scanFailed("\(url.lastPathComponent) ist kein lesbares Bild.")
+                            }
+                            // Kopie ins Arbeitsverzeichnis, damit das Original unberührt bleibt
+                            let target = folder.appendingPathComponent(String(format: "%04d.png", pages.count + 1))
+                            try ImageTools.writePNG(image, to: target)
+                            pages.append((target, ImageTools.dpi(of: url, width: image.width)))
+                        }
+                    }
+                    return .success(pages)
+                } catch {
+                    return .failure(error)
+                }
+            }.value
+
+            switch result {
+            case let .success(imported):
+                fronts = imported.map(\.0)
+                backs = []
+                pages = imported.map { makePage($0.0, kind: .imported, rotated: false, dpi: $0.1) }
+                phase = .preview
+                startAnalysis()
+            case let .failure(error):
+                phase = .failed(error.localizedDescription)
+            }
+        }
     }
 
     // MARK: Speichern
@@ -248,9 +310,9 @@ final class ScanSession {
             return
         }
         analysisTask?.cancel()
-        let input = pages.map { page -> (url: URL, rotated: Bool, lines: [OCRLine]?) in
+        let input = pages.map { page -> (url: URL, rotated: Bool, lines: [OCRLine]?, dpi: Double?) in
             let cached = ocrCache[page.id]
-            return (page.url, page.rotated180, cached?.rotated == page.rotated180 ? cached?.lines : nil)
+            return (page.url, page.rotated180, cached?.rotated == page.rotated180 ? cached?.lines : nil, page.dpi)
         }
         let dpi = Double(dpi)
         let quality = UserDefaults.standard.double(forKey: SettingsKey.jpegQuality)
@@ -271,7 +333,7 @@ final class ScanSession {
                     }
                     if page.rotated { image = ImageTools.rotated180(image) }
                     let lines = try page.lines ?? OCRService.recognize(image)
-                    pdfPages.append(PDFPageInput(image: image, lines: lines))
+                    pdfPages.append(PDFPageInput(image: image, lines: lines, dpi: page.dpi))
                 }
                 await MainActor.run { self.phase = .processing("PDF wird gespeichert …") }
                 let saved = try archive.save(date: date, title: title) { number in

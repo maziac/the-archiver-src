@@ -1,12 +1,32 @@
 import ImageCaptureCore
 import ScanArchivCore
 import SwiftUI
+import UniformTypeIdentifiers
 
 struct ScanView: View {
     @Bindable var session: ScanSession
     @Environment(AppModel.self) private var model
 
+    @State private var dropTargeted = false
+
     private var scanner: ScannerService { session.scanner }
+
+    private func chooseFiles() {
+        let panel = NSOpenPanel()
+        panel.title = "Dokumente importieren"
+        panel.message = "PDFs oder Bilder auswählen. Mehrere Dateien werden – nach Namen sortiert – zu einem Dokument zusammengefasst."
+        panel.prompt = "Importieren"
+        panel.allowsMultipleSelection = true
+        panel.canChooseDirectories = false
+        panel.allowedContentTypes = ScanSession.importableTypes
+        if panel.runModal() == .OK {
+            session.importFiles(Self.sortedByName(panel.urls))
+        }
+    }
+
+    private static func sortedByName(_ urls: [URL]) -> [URL] {
+        urls.sorted { $0.lastPathComponent.localizedStandardCompare($1.lastPathComponent) == .orderedAscending }
+    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -71,11 +91,27 @@ struct ScanView: View {
                 step: "Schritt 1 von 2",
                 icon: "doc.on.doc",
                 title: "Vorderseiten scannen",
-                text: "Lege den Stapel mit den Vorderseiten nach oben in den Einzug, die erste Seite obenauf.")
+                text: "Lege den Stapel mit den Vorderseiten nach oben in den Einzug, die erste Seite obenauf.\nOder übernimm vorhandene PDFs bzw. Bilder – per Dateiauswahl oder indem du sie hierher ziehst.")
             {
+                Button("Dateien importieren …") { chooseFiles() }
                 Button("Vorderseiten scannen") { session.scanFronts() }
                     .keyboardShortcut(.defaultAction)
                     .disabled(!scanner.isReady)
+            }
+            .dropDestination(for: URL.self) { urls, _ in
+                let files = urls.filter { url in
+                    ScanSession.importableTypes.contains { UTType(filenameExtension: url.pathExtension)?.conforms(to: $0) == true }
+                }
+                guard !files.isEmpty else { return false }
+                session.importFiles(Self.sortedByName(files))
+                return true
+            } isTargeted: { dropTargeted = $0 }
+            .overlay {
+                if dropTargeted {
+                    RoundedRectangle(cornerRadius: 12)
+                        .strokeBorder(Color.accentColor, style: StrokeStyle(lineWidth: 3, dash: [8]))
+                        .padding(8)
+                }
             }
 
         case .scanningFronts, .scanningBacks:
@@ -177,5 +213,7 @@ private struct Instruction<Actions: View>: View {
                 .padding(.top, 8)
         }
         .padding(30)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .contentShape(Rectangle())
     }
 }

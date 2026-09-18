@@ -87,6 +87,9 @@ struct SearchView: View {
                     }
                 }
                 .padding(.vertical, 3)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .contentShape(Rectangle())
+                .help(tooltip(for: record))
             }
             TableColumn("Seiten") { Text("\($0.pages)").monospacedDigit() }
                 .width(44)
@@ -141,6 +144,11 @@ struct SearchView: View {
             .padding(.horizontal, 10)
             .padding(.bottom, 8)
         }
+    }
+
+    /// Tooltip: vollständiger Titel und die ganze Beschreibung
+    private func tooltip(for record: DocumentRecord) -> String {
+        record.summary.isEmpty ? record.displayTitle : "\(record.displayTitle)\n\n\(record.summary)"
     }
 
     private func open(_ ids: Set<DocumentRecord.ID>) {
