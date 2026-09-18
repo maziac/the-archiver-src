@@ -84,6 +84,20 @@ final class AppModel {
         revision += 1
     }
 
+    /// Legt Dokumente in den Papierkorb (wiederherstellbar) und nimmt sie aus dem Index.
+    /// Ihre Nummern werden nicht erneut vergeben (Zähler in counter.json).
+    func deleteDocuments(paths: [String]) throws {
+        guard let index else { return }
+        defer { revision += 1 }
+        for path in paths {
+            let url = URL(fileURLWithPath: path)
+            if FileManager.default.fileExists(atPath: path) {
+                try FileManager.default.trashItem(at: url, resultingItemURL: nil)
+            }
+            try index.remove(path: path)
+        }
+    }
+
     func suggestion(forPath path: String) async throws -> DocumentSuggestion {
         guard let index else { throw SummarizerError.failed("Kein Archiv geöffnet.") }
         let fallback = try index.fullText(path: path)

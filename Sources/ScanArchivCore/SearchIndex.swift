@@ -74,6 +74,11 @@ public final class SearchIndex: @unchecked Sendable {
                 [newURL.path, date.timeIntervalSince1970, title, summary, oldPath])
     }
 
+    public func remove(path: String) throws {
+        lock.lock(); defer { lock.unlock() }
+        try run("DELETE FROM docs WHERE path = ?", [path])
+    }
+
     /// Dokumente ohne Titel samt Volltext – für das nachträgliche Erzeugen von Titeln.
     public func recordsWithoutTitle() throws -> [(path: String, text: String)] {
         lock.lock(); defer { lock.unlock() }

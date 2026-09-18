@@ -84,4 +84,10 @@ struct SearchIndexTests {
         try index.add(number: 1, date: Date(), url: folder.appendingPathComponent("x.pdf"), pages: 1, text: "t", title: "Titel")
         #expect(try index.search("titel").count == 1)
     }
+
+    @Test func removeDocument() throws {
+        let index = try makeIndex()
+        try index.remove(path: folder.appendingPathComponent("b.pdf").path)
+        #expect(try index.search("").map(\.number) == [123, 1])
+    }
 }

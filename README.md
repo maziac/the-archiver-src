@@ -51,6 +51,8 @@ startet, sobald diese erkannt sind, die übrigen Seiten werden im Hintergrund er
 
 Im Archiv lassen sich Datum, Titel und Beschreibung per Rechtsklick → **Bearbeiten …** ändern. Die Datei
 wird dabei umbenannt. Der Stempel auf Seite 1 behält das Datum vom Speichern.
+Per Rechtsklick → **Löschen …** oder mit der Entf-Taste landen Dokumente nach einer Rückfrage im
+Papierkorb und lassen sich dort wiederherstellen. Ihre Nummern werden nicht neu vergeben.
 Fährst du mit der Maus über die Spalte „Dokument“, zeigt ein Tooltip die ganze Beschreibung.
 Für Dokumente ohne Titel gibt es oben im Archiv den Button **Titel erzeugen**.
 

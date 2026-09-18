@@ -8,6 +8,7 @@ struct SearchView: View {
     @State private var selection = Set<DocumentRecord.ID>()
     @State private var sortOrder = [KeyPathComparator(\DocumentRecord.number, order: .reverse)]
     @State private var editing: DocumentRecord?
+    @State private var pendingDelete: [DocumentRecord] = []
     @State private var error: String?
 
     static let dateFormat: DateFormatter = {
@@ -105,8 +106,32 @@ struct SearchView: View {
             Button("Im Finder zeigen") {
                 NSWorkspace.shared.activateFileViewerSelecting(ids.map { URL(fileURLWithPath: $0) })
             }
+            Divider()
+            Button(ids.count > 1 ? "\(ids.count) Dokumente löschen …" : "Löschen …", role: .destructive) {
+                pendingDelete = results.filter { ids.contains($0.id) }
+            }
         } primaryAction: { ids in
             open(ids)  // Doppelklick
+        }
+        .onDeleteCommand {  // Entf-Taste bzw. Bearbeiten → Löschen
+            pendingDelete = results.filter { selection.contains($0.id) }
+        }
+        .confirmationDialog(deleteQuestion, isPresented: Binding(
+            get: { !pendingDelete.isEmpty },
+            set: { if !$0 { pendingDelete = [] } })
+        ) {
+            Button("In den Papierkorb legen", role: .destructive) {
+                do {
+                    try model.deleteDocuments(paths: pendingDelete.map(\.path))
+                    selection.subtract(pendingDelete.map(\.id))
+                } catch {
+                    self.error = error.localizedDescription
+                }
+                pendingDelete = []
+            }
+            Button("Abbrechen", role: .cancel) { pendingDelete = [] }
+        } message: {
+            Text("Die Datei(en) werden in den Papierkorb gelegt und können dort wiederhergestellt werden. Die Nummern werden nicht neu vergeben.")
         }
     }
 
@@ -144,6 +169,13 @@ struct SearchView: View {
             .padding(.horizontal, 10)
             .padding(.bottom, 8)
         }
+    }
+
+    private var deleteQuestion: String {
+        if pendingDelete.count == 1, let doc = pendingDelete.first {
+            return "„\(doc.displayTitle)“ (Nr. \(Archive.formatNumber(doc.number))) löschen?"
+        }
+        return "\(pendingDelete.count) Dokumente löschen?"
     }
 
     /// Tooltip: vollständiger Titel und die ganze Beschreibung
