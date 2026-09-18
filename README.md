@@ -51,6 +51,11 @@ startet, sobald diese erkannt sind, die übrigen Seiten werden im Hintergrund er
 
 Im Archiv lassen sich Datum, Titel und Beschreibung per Rechtsklick → **Bearbeiten …** ändern. Die Datei
 wird dabei umbenannt. Der Stempel auf Seite 1 behält das Datum vom Speichern.
+**Vorschau im Archiv:** Ein Klick auf ein Dokument zeigt es rechts neben der Liste. Das Suchfeld
+der Vorschau übernimmt den Suchbegriff aus dem Archiv und lässt sich frei ändern. Alle Treffer sind
+gelb markiert, der aktuelle ist ausgewählt. Mit ⏎ oder ⌘G springst du zum nächsten Treffer, mit ⇧⌘G
+zum vorherigen. Die Trefferliste unter dem Dokument zeigt Seite und Textumgebung; ein Klick springt hin.
+
 Per Rechtsklick → **Löschen …** oder mit der Entf-Taste landen Dokumente nach einer Rückfrage im
 Papierkorb und lassen sich dort wiederherstellen. Ihre Nummern werden nicht neu vergeben.
 Fährst du mit der Maus über die Spalte „Dokument“, zeigt ein Tooltip die ganze Beschreibung.

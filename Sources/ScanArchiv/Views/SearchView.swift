@@ -9,6 +9,7 @@ struct SearchView: View {
     @State private var sortOrder = [KeyPathComparator(\DocumentRecord.number, order: .reverse)]
     @State private var editing: DocumentRecord?
     @State private var pendingDelete: [DocumentRecord] = []
+    @State private var preview = PDFPreviewModel()
     @State private var error: String?
 
     static let dateFormat: DateFormatter = {
@@ -45,8 +46,17 @@ struct SearchView: View {
             if let error = error ?? model.error {
                 Text(error).foregroundStyle(.red).padding()
             }
-            table
+            HSplitView {
+                table
+                    .frame(minWidth: 440, idealWidth: 620)
+                PDFPreviewPane(preview: preview)
+                    .frame(minWidth: 320, idealWidth: 480, maxHeight: .infinity)
+            }
         }
+        // Vorschau folgt der Auswahl; Suchbegriff aus dem Archiv ist die Voreinstellung
+        .onChange(of: selection) { _, _ in updatePreview() }
+        .onChange(of: query) { _, _ in updatePreview() }
+        .onChange(of: results) { _, _ in updatePreview() }
         .task(id: "\(query)|\(model.revision)|\(model.archive?.folder.path ?? "")") {
             try? await Task.sleep(for: .milliseconds(150))
             guard !Task.isCancelled, let index = model.index else { return }
@@ -169,6 +179,12 @@ struct SearchView: View {
             .padding(.horizontal, 10)
             .padding(.bottom, 8)
         }
+    }
+
+    /// Erstes ausgewähltes Dokument (in Listenreihenfolge) in der Vorschau zeigen.
+    private func updatePreview() {
+        let shown = results.first { selection.contains($0.id) }
+        preview.show(url: shown?.url, query: query)
     }
 
     private var deleteQuestion: String {

@@ -19,7 +19,7 @@ struct ScanArchivApp: App {
                 SearchView()
                     .tabItem { Label("Archiv", systemImage: "magnifyingglass") }
             }
-            .frame(minWidth: 820, minHeight: 560)
+            .frame(minWidth: 900, minHeight: 600)
             .environment(model)
         }
         Settings {
