@@ -152,7 +152,9 @@ struct ImportProcessorTests {
         let env = try makeEnv()
         let result = try await process(makeBlankImagePDF(), env)
         #expect(result.issues.contains(.noText(pages: [1])))
-        #expect(result.issues.contains(.noDate))
+        // kein Datum im Text → Ersatz aus der Datei (hier: Erstelldatum im PDF), daher kein Vermerk „kein Datum“
+        #expect(!result.issues.contains(.noDate))
+        #expect(result.meta.dateSource == .pdfCreation)
         #expect(result.issues.contains { if case .noSuggestion = $0 { return true }; return false })
         #expect(PDFMetadata.read(url: result.url)?.issues == result.issues)
         #expect(try env.1.search("", onlyIssues: true).map(\.number) == [result.number])

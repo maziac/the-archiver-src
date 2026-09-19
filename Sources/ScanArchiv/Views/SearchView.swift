@@ -12,6 +12,11 @@ struct SearchView: View {
     @State private var preview = PDFPreviewModel()
     @State private var onlyIssues = false
     @State private var error: String?
+    /// aktive Tags (UND-verknüpft mit dem Suchfeld)
+    @State private var activeTags = Set<UUID>()
+    @State private var tagCounts: [UUID: Int] = [:]
+    @State private var editingTag: Tag?
+    @State private var creatingTag = false
 
     static let dateFormat: DateFormatter = {
         let f = DateFormatter()
@@ -22,6 +27,7 @@ struct SearchView: View {
 
     var body: some View {
         VStack(spacing: 0) {
+            tagBar
             HStack {
                 Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
                 TextField("Schlagworte oder Dokumentnummer …", text: $query)
@@ -65,16 +71,36 @@ struct SearchView: View {
         .onChange(of: selection) { _, _ in updatePreview() }
         .onChange(of: query) { _, _ in updatePreview() }
         .onChange(of: results) { _, _ in updatePreview() }
-        .task(id: "\(query)|\(onlyIssues)|\(model.revision)|\(model.archive?.folder.path ?? "")") {
+        .task(id: "\(query)|\(onlyIssues)|\(activeTagQueries)|\(model.revision)|\(model.archive?.folder.path ?? "")") {
             try? await Task.sleep(for: .milliseconds(150))
             guard !Task.isCancelled, let index = model.index else { return }
             do {
-                results = try index.search(query, onlyIssues: onlyIssues).sorted(using: sortOrder)
+                results = try index.search(query, tagQueries: activeTagQueries, onlyIssues: onlyIssues).sorted(using: sortOrder)
                 error = nil
             } catch {
-                self.error = error.localizedDescription
+                self.error = "Tag-Suche: \(error.localizedDescription)"
             }
         }
+        // Trefferzahlen der Tags im Hintergrund (bei tausenden Dokumenten wenige Millisekunden je Tag)
+        .task(id: "\(model.tags)|\(model.revision)") {
+            guard let index = model.index else { return }
+            let tags = model.tags
+            let counts = await Task.detached(priority: .utility) { () -> [UUID: Int] in
+                var result: [UUID: Int] = [:]
+                let clock = ContinuousClock()
+                for tag in tags {
+                    var count: Int?
+                    let elapsed = clock.measure { count = try? index.count(tagQuery: tag.query) }
+                    if let count { result[tag.id] = count }
+                    if elapsed > .seconds(2) { break }  // zu langsam: restliche Tags nur mit Namen
+                }
+                return result
+            }.value
+            if !Task.isCancelled { tagCounts = counts }
+        }
+        .onChange(of: model.tags) { _, tags in activeTags.formIntersection(tags.map(\.id)) }
+        .sheet(item: $editingTag) { tag in TagEditorSheet(tag: tag) }
+        .sheet(isPresented: $creatingTag) { TagEditorSheet(tag: nil) }
         .onChange(of: sortOrder) { _, order in results.sort(using: order) }
         .sheet(item: $editing) { record in
             EditDocumentSheet(record: record)
@@ -218,6 +244,56 @@ struct SearchView: View {
             .padding(.horizontal, 10)
             .padding(.bottom, 8)
         }
+    }
+
+    private var activeTagQueries: [String] {
+        model.tags.filter { activeTags.contains($0.id) }.map(\.query)
+    }
+
+    /// Tags als Schaltflächen über dem Suchfeld; Klick schaltet den Filter an/aus.
+    private var tagBar: some View {
+        HStack(spacing: 6) {
+            Image(systemName: "tag").foregroundStyle(.secondary)
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 6) {
+                    if model.tags.isEmpty {
+                        Text("Noch keine Tags – mit „+“ eine gespeicherte Suche anlegen")
+                            .font(.callout)
+                            .foregroundStyle(.tertiary)
+                    }
+                    ForEach(model.tags) { tag in
+                        Toggle(isOn: Binding(
+                            get: { activeTags.contains(tag.id) },
+                            set: { on in if on { activeTags.insert(tag.id) } else { activeTags.remove(tag.id) } })
+                        ) {
+                            Text(tagCounts[tag.id].map { "\(tag.name) (\($0))" } ?? tag.name)
+                                .monospacedDigit()
+                        }
+                        .toggleStyle(.button)
+                        .help(tag.query)
+                        .contextMenu {
+                            Button("Bearbeiten …") { editingTag = tag }
+                            Button("Löschen", role: .destructive) {
+                                activeTags.remove(tag.id)
+                                try? model.removeTag(tag)
+                            }
+                        }
+                    }
+                }
+                .padding(.vertical, 2)
+            }
+            if !activeTags.isEmpty {
+                Button("Alle aufheben") { activeTags.removeAll() }
+                    .buttonStyle(.borderless)
+                    .font(.callout)
+            }
+            Button { creatingTag = true } label: { Image(systemName: "plus") }
+                .help("Neuen Tag anlegen")
+                .disabled(model.tagStore == nil)
+        }
+        .controlSize(.small)
+        .padding(.horizontal, 10)
+        .padding(.top, 8)
     }
 
     /// Erstes ausgewähltes Dokument (in Listenreihenfolge) in der Vorschau zeigen.

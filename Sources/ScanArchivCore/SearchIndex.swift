@@ -69,7 +69,12 @@ public final class SearchIndex: @unchecked Sendable {
                 originalName, title, summary, text,
                 tokenize = 'unicode61 remove_diacritics 2')
             """)
+        // Wörterbuch aller Begriffe – für Tag-Platzhalter am Wortanfang („*rente“)
+        vocabularyAvailable = (try? exec("CREATE VIRTUAL TABLE IF NOT EXISTS docs_vocab USING fts5vocab(docs, row)")) != nil
     }
+
+    /// false, wenn SQLite kein fts5vocab bietet (dann sind führende Platzhalter nicht möglich)
+    public private(set) var vocabularyAvailable = false
 
     private func userVersion() throws -> Int32 {
         try query("PRAGMA user_version", []) { sqlite3_column_int($0, 0) }.first ?? 0
@@ -189,11 +194,39 @@ public final class SearchIndex: @unchecked Sendable {
 
     // MARK: Suchen
 
+    // MARK: Tags
+
+    /// FTS5-Ausdruck eines Tags (Platzhalter am Wortanfang über das Wörterbuch aufgelöst).
+    /// Aufrufer hält den Lock.
+    private func tagExpression(_ tagQuery: String) throws -> String {
+        let node = try TagQuery.parse(tagQuery)
+        return try TagQuery.fts(node) { pattern in
+            guard vocabularyAvailable else {
+                throw TagQuery.ParseError(message: "Platzhalter am Wortanfang werden hier nicht unterstützt – nur am Wortende (rente*)")
+            }
+            return try query("SELECT term FROM docs_vocab WHERE term LIKE ? ESCAPE '\\' ORDER BY term LIMIT 500", [pattern]) {
+                SearchIndex.text($0, 0)
+            }
+        }
+    }
+
+    /// Anzahl der Dokumente, die ein Tag-Ausdruck trifft (wirft bei ungültigem Ausdruck).
+    public func count(tagQuery: String) throws -> Int {
+        lock.lock(); defer { lock.unlock() }
+        let expression = try tagExpression(tagQuery)
+        return try query("SELECT count(*) FROM docs WHERE docs MATCH ?", [expression]) { Int(sqlite3_column_int($0, 0)) }.first ?? 0
+    }
+
     /// Stichwortsuche: alle Wörter müssen vorkommen (UND), jeweils als Präfix.
+    /// Dazu optional Tags (je ein Suchausdruck); alles wird UND-verknüpft.
     /// Leere Suche liefert alle Dokumente. Sortiert nach Nummer absteigend.
     /// `onlyIssues`: nur Dokumente mit Problemen.
-    public func search(_ query: String, onlyIssues: Bool = false, limit: Int = 1000) throws -> [DocumentRecord] {
+    /// Markiert werden im Textausschnitt nur Wörter aus `query`, nie die der Tags.
+    public func search(_ query: String, tagQueries: [String] = [], onlyIssues: Bool = false, limit: Int = 1000) throws -> [DocumentRecord] {
         lock.lock(); defer { lock.unlock() }
+        if !tagQueries.isEmpty {
+            return try searchWithTags(query, tagQueries: tagQueries, onlyIssues: onlyIssues, limit: limit)
+        }
         let match = SearchIndex.matchExpression(for: query)
         let issueFilter = onlyIssues ? "issues != ''" : "1"
         let order = "ORDER BY CAST(substr(number, 1, instr(number, ' ') - 1) AS INTEGER) DESC, path LIMIT ?"
@@ -220,6 +253,65 @@ public final class SearchIndex: @unchecked Sendable {
         return try self.query("""
             SELECT \(fields), substr(text, 1, 160) FROM docs WHERE \(issueFilter) \(order)
             """, [limit], map)
+    }
+
+    /// Suche mit Tags: Textausschnitt in Swift, damit Tag-Wörter nicht markiert werden. Aufrufer hält den Lock.
+    private func searchWithTags(_ query: String, tagQueries: [String], onlyIssues: Bool, limit: Int) throws -> [DocumentRecord] {
+        var parts = try tagQueries.map { "(" + (try tagExpression($0)) + ")" }
+        if let free = SearchIndex.matchExpression(for: query) { parts.append("(" + free + ")") }
+        let issueFilter = onlyIssues ? "issues != ''" : "1"
+        let words = SearchIndex.words(in: query)
+        return try self.query("""
+            SELECT number, date, path, pages, issues, title, summary, meta, text
+            FROM docs WHERE docs MATCH ? AND \(issueFilter)
+            ORDER BY CAST(substr(number, 1, instr(number, ' ') - 1) AS INTEGER) DESC, path LIMIT ?
+            """, [parts.joined(separator: " AND "), limit]) { stmt in
+            DocumentRecord(
+                number: Int(SearchIndex.text(stmt, 0).split(separator: " ").first ?? "") ?? 0,
+                date: Date(timeIntervalSince1970: sqlite3_column_double(stmt, 1)),
+                path: SearchIndex.text(stmt, 2),
+                pages: Int(sqlite3_column_int(stmt, 3)),
+                title: SearchIndex.text(stmt, 5),
+                summary: SearchIndex.text(stmt, 6),
+                issues: DocumentIssue.decode(SearchIndex.text(stmt, 4)),
+                meta: DocumentMetadata.decode(SearchIndex.text(stmt, 7)),
+                snippet: SearchIndex.snippet(SearchIndex.text(stmt, 8), highlighting: words))
+        }
+    }
+
+    static func words(in query: String) -> [String] {
+        query.components(separatedBy: CharacterSet.alphanumerics.inverted).filter { !$0.isEmpty }
+    }
+
+    /// Textausschnitt um die erste Fundstelle eines Suchfeld-Wortes (Wortanfang, ohne Beachtung von
+    /// Groß-/Kleinschreibung und Akzenten); Treffer mit \u{1}…\u{2} markiert. Ohne Wörter: Textanfang.
+    static func snippet(_ text: String, highlighting words: [String], before: Int = 60, after: Int = 110) -> String {
+        let flat = text.replacingOccurrences(of: "\n", with: " ")
+        guard !words.isEmpty else { return String(flat.prefix(160)) }
+        let options: String.CompareOptions = [.caseInsensitive, .diacriticInsensitive]
+        var firstHit: Range<String.Index>?
+        for word in words {
+            var searchStart = flat.startIndex
+            while let range = flat.range(of: word, options: options, range: searchStart..<flat.endIndex) {
+                // nur am Wortanfang (wie die Suche)
+                if range.lowerBound == flat.startIndex || !flat[flat.index(before: range.lowerBound)].isLetter {
+                    if firstHit == nil || range.lowerBound < firstHit!.lowerBound { firstHit = range }
+                    break
+                }
+                searchStart = range.upperBound
+            }
+        }
+        guard let hit = firstHit else { return String(flat.prefix(160)) }
+        let start = flat.index(hit.lowerBound, offsetBy: -before, limitedBy: flat.startIndex) ?? flat.startIndex
+        let end = flat.index(hit.upperBound, offsetBy: after, limitedBy: flat.endIndex) ?? flat.endIndex
+        var result = start > flat.startIndex ? "…" : ""
+        result += flat[start..<hit.lowerBound]
+        // ganzes Wort markieren
+        var wordEnd = hit.upperBound
+        while wordEnd < end, flat[wordEnd].isLetter || flat[wordEnd].isNumber { wordEnd = flat.index(after: wordEnd) }
+        result += "\u{1}" + flat[hit.lowerBound..<wordEnd] + "\u{2}" + flat[wordEnd..<end]
+        if end < flat.endIndex { result += "…" }
+        return result
     }
 
     /// Baut aus der Nutzereingabe einen sicheren FTS5-Ausdruck, z. B. `"rechn"* "2024"*`.

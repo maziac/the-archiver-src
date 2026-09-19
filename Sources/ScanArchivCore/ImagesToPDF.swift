@@ -22,6 +22,11 @@ public enum ImagesToPDF {
         return try PDFBuilder.build(pages: pages, number: 0, date: Date(), dpi: 300, stamp: false)
     }
 
+    /// Dateidatum eines Bildes (früheres von Erstell- und Änderungsdatum).
+    public static func fileDate(_ url: URL) -> Date? {
+        FileDate.fileSystemDate(url)
+    }
+
     /// Dateiname für das zusammengefasste PDF, z. B. „Scan 1 + 4 Bilder.pdf“.
     public static func fileName(for urls: [URL]) -> String {
         let base = urls.first.map { ($0.lastPathComponent as NSString).deletingPathExtension } ?? "Bilder"

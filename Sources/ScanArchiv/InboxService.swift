@@ -205,7 +205,13 @@ final class InboxService {
             let failure = await Task.detached { () -> String? in
                 do {
                     let data = try ImagesToPDF.combine(images)
-                    try data.write(to: InboxService.uniqueURL(for: ImagesToPDF.fileName(for: images), in: folder))
+                    let target = InboxService.uniqueURL(for: ImagesToPDF.fileName(for: images), in: folder)
+                    try data.write(to: target)
+                    // Dateidatum der Bilder übernehmen (frühestes), sonst hätte das PDF das Datum von heute
+                    if let earliest = images.compactMap(ImagesToPDF.fileDate).min() {
+                        try? FileManager.default.setAttributes([.creationDate: earliest, .modificationDate: earliest],
+                                                               ofItemAtPath: target.path)
+                    }
                     return nil
                 } catch {
                     return error.localizedDescription

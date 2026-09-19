@@ -129,6 +129,9 @@ public enum DocumentInfo {
         case .today: return "Tagesdatum – kein Datum gefunden"
         case .manual: return "von Hand"
         case .unknown: return "Herkunft unbekannt"
+        case .fileName: return "aus dem Dateinamen – kein Datum im Text"
+        case .pdfCreation: return "Erstelldatum des PDFs – kein Datum im Text"
+        case .fileDate: return "Datum der Datei – kein Datum im Text"
         }
     }
 

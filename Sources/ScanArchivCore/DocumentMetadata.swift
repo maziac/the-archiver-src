@@ -5,8 +5,9 @@ import PDFKit
 /// im Suchindex; „Index neu aufbauen“ stellt den Index daraus vollständig wieder her.
 public struct DocumentMetadata: Codable, Equatable, Sendable {
     public enum DateSource: String, Codable, Sendable {
-        /// aus dem Text erkannt, von Apple Intelligence gewählt, Tagesdatum (nichts gefunden), von Hand, unbekannt (Altbestand)
-        case text, ai, today, manual, unknown
+        /// aus dem Text erkannt, von Apple Intelligence gewählt, Tagesdatum (nichts gefunden), von Hand, unbekannt (Altbestand),
+        /// Ersatz ohne Datum im Text: Dateiname, Erstelldatum im PDF, Datum im Dateisystem
+        case text, ai, today, manual, unknown, fileName, pdfCreation, fileDate
     }
 
     public enum TitleSource: String, Codable, Sendable {

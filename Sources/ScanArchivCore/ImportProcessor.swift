@@ -214,10 +214,21 @@ public enum ImportProcessor {
                 issues.append(.noSuggestion(error.localizedDescription))
             }
         }
+        // Datum: 1. im Text (Apple Intelligence bzw. erkannt), 2. der Datei (Name, PDF, Dateisystem), 3. heute
         let textDate = DateExtractor.bestGuess(in: pageTexts.first ?? "") ?? DateExtractor.bestGuess(in: firstText)
-        let dateSource: DocumentMetadata.DateSource = suggestion?.date != nil ? .ai : (textDate != nil ? .text : .today)
-        if dateSource == .today { issues.append(.noDate) }
-        let date = suggestion?.date ?? textDate ?? Date()
+        let fileDate = FileDate.best(for: file)
+        let date: Date
+        let dateSource: DocumentMetadata.DateSource
+        if let aiDate = suggestion?.date {
+            (date, dateSource) = (aiDate, .ai)
+        } else if let textDate {
+            (date, dateSource) = (textDate, .text)
+        } else if let fileDate {
+            (date, dateSource) = (fileDate.date, fileDate.source)
+        } else {
+            (date, dateSource) = (Date(), .today)
+            issues.append(.noDate)
+        }
         let title = suggestion?.title ?? ""
         let summary = suggestion?.summary ?? ""
         let usesOCR = textSources.contains { $0 != .embedded }

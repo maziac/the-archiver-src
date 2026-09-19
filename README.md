@@ -66,6 +66,40 @@ Originalauflösung und Farbe, Links und Lesezeichen bleiben erhalten. Seiten mit
 Bild sind, bekommen eine unsichtbare OCR-Textebene. Hinzu kommen nur der rote Stempel und die Metadaten.
 Für Titel, Beschreibung und Datum werden die ersten zwei Seiten verwendet.
 
+## Tags (gespeicherte Suchen)
+
+Über dem Suchfeld im Archiv stehen **Tags**: benannte Suchen wie „Rente“ mit dem Ausdruck
+`("Rente" AND "DRV") OR "Rentenversicherung"`. Ein Klick schaltet einen Tag als Filter an oder aus; mehrere
+aktive Tags und das Suchfeld werden **UND-verknüpft**. Die Zahl hinter dem Namen zeigt, wie viele Dokumente
+der Tag trifft. „+“ legt einen Tag an, Rechtsklick → „Bearbeiten …“ / „Löschen“.
+
+| Ausdruck | findet |
+|---|---|
+| `Rente` oder `"Rente"` | genau dieses Wort (Groß-/Kleinschreibung und Umlaute egal) |
+| `rente*` | Wortanfang: Rente, Rentenbescheid, … |
+| `*rente` | Wortende: Altersrente, Witwenrente, … |
+| `*rente*` | enthält: Altersrentenbescheid, … |
+| `"Deutsche Rentenversicherung"` | Wortfolge |
+| `A AND B`, `A OR B`, `A NOT B`, `( … )` | auch `UND`, `ODER`, `NICHT`; ohne Operator gilt AND |
+
+- Tags stehen **nicht** im Dokument und werden in Liste und Vorschau **nicht markiert** – sie filtern nur.
+  Markiert werden nur Wörter aus dem Suchfeld.
+- Der Editor prüft den Ausdruck sofort und zeigt die Trefferzahl.
+- Gespeichert werden die Tags im Archivordner in `.scanarchiv-tags.json`; sie wandern also mit dem Archiv.
+
+## Dokumentdatum
+
+Das Datum im Dateinamen und in der Liste wird in dieser Reihenfolge bestimmt:
+
+1. **Datum im Text** – das Brief-/Rechnungsdatum (von Apple Intelligence gewählt oder direkt erkannt),
+2. **Datum der Datei** (nur bei Importen): zuerst ein Datum im **Dateinamen** (`2025-12-11_…`, `20251211_…`,
+   `11.12.2025 …`), sonst das **Erstelldatum im PDF**, sonst das **Datum im Dateisystem** (das frühere von
+   Erstell- und Änderungsdatum). Das Kopieren in den Eingang ändert diese Daten nicht; beim Verbinden mehrerer
+   Bilder übernimmt das PDF das früheste Bilddatum.
+3. **heutiges Datum** – dann mit dem Vermerk „kein Datum gefunden“.
+
+Woher das Datum stammt, steht in der Info (ⓘ) unter „Dokumentdatum“.
+
 ## Dokumente mit Problemen
 
 Lässt sich eine Datei zwar lesen, aber nicht vollständig verarbeiten, wird sie trotzdem archiviert und
@@ -167,6 +201,7 @@ Archivordner, Eingangsordner, Scan-Auflösung und -Farbe, Rückseiten drehen, Ko
 | --- | --- |
 | `JJJJ-MM-TT_NNNNNN_Titel.pdf` | die Dokumente (Titel und Beschreibung auch in den PDF-Metadaten) |
 | `counter.json` | letzte vergebene Nummer |
+| `.scanarchiv-tags.json` | Tags (gespeicherte Suchen) |
 | `.scanarchiv-index.sqlite` | Suchindex (SQLite FTS5), jederzeit per „Index neu aufbauen“ wiederherstellbar |
 
 Die nächste Nummer ist immer größer als der Zählerstand **und** größer als jede Nummer, die schon in

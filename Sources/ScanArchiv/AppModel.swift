@@ -63,6 +63,9 @@ enum AppTab: Hashable {
 final class AppModel {
     private(set) var archive: Archive?
     private(set) var index: SearchIndex?
+    /// Tags (gespeicherte Suchen) des Archivs
+    private(set) var tagStore: TagStore?
+    private(set) var tags: [Tag] = []
     var selectedTab: AppTab = .scan
     private(set) var error: String?
     /// Wird nach jedem gespeicherten Dokument / Reindex erhöht, damit die Suche neu lädt.
@@ -82,11 +85,16 @@ final class AppModel {
             let index = try SearchIndex(url: folder.appendingPathComponent(SearchIndex.fileName))
             self.archive = archive
             self.index = index
+            let tagStore = TagStore(folder: folder)
+            self.tagStore = tagStore
+            tags = tagStore.all
             error = nil
             reindex(full: false)
         } catch {
             self.archive = nil
             self.index = nil
+            tagStore = nil
+            tags = []
             self.error = error.localizedDescription
         }
     }
@@ -116,6 +124,20 @@ final class AppModel {
     }
 
     func didSave() { revision += 1 }
+
+    // MARK: Tags
+
+    func saveTag(_ tag: Tag) throws {
+        guard let tagStore else { return }
+        if tags.contains(where: { $0.id == tag.id }) { try tagStore.update(tag) } else { try tagStore.add(tag) }
+        tags = tagStore.all
+    }
+
+    func removeTag(_ tag: Tag) throws {
+        guard let tagStore else { return }
+        try tagStore.remove(id: tag.id)
+        tags = tagStore.all
+    }
 
     // MARK: Titel/Beschreibung/Datum bearbeiten
 
