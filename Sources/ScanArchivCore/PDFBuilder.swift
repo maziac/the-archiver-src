@@ -241,16 +241,46 @@ public enum ImageTools {
     }
 
     public static func rotated180(_ image: CGImage) -> CGImage {
+        rotated(image, clockwise: 180)
+    }
+
+    /// Dreht ein Bild um 0/90/180/270° im Uhrzeigersinn; bei 90/270° werden Breite und Höhe getauscht.
+    public static func rotated(_ image: CGImage, clockwise degrees: Int) -> CGImage {
+        let degrees = (degrees % 360 + 360) % 360
+        guard degrees != 0 else { return image }
         let colorSpace = image.colorSpace ?? CGColorSpaceCreateDeviceRGB()
         let isGray = colorSpace.model == .monochrome
-        guard let ctx = CGContext(data: nil, width: image.width, height: image.height, bitsPerComponent: 8, bytesPerRow: 0,
+        let swap = degrees % 180 != 0
+        let width = swap ? image.height : image.width, height = swap ? image.width : image.height
+        guard let ctx = CGContext(data: nil, width: width, height: height, bitsPerComponent: 8, bytesPerRow: 0,
                                   space: isGray ? CGColorSpaceCreateDeviceGray() : CGColorSpaceCreateDeviceRGB(),
                                   bitmapInfo: isGray ? CGImageAlphaInfo.none.rawValue : CGImageAlphaInfo.noneSkipLast.rawValue) else {
             return image
         }
-        ctx.translateBy(x: CGFloat(image.width), y: CGFloat(image.height))
-        ctx.rotate(by: .pi)
+        // exakte Matrizen (kein rotate(by:) – Rundungsfehler würden das Bild neu abtasten und weichzeichnen)
+        let w = CGFloat(width), h = CGFloat(height)
+        switch degrees {
+        case 90: ctx.concatenate(CGAffineTransform(a: 0, b: -1, c: 1, d: 0, tx: 0, ty: h))
+        case 180: ctx.concatenate(CGAffineTransform(a: -1, b: 0, c: 0, d: -1, tx: w, ty: h))
+        default: ctx.concatenate(CGAffineTransform(a: 0, b: 1, c: -1, d: 0, tx: w, ty: 0))
+        }
+        ctx.interpolationQuality = .none
         ctx.draw(image, in: CGRect(x: 0, y: 0, width: image.width, height: image.height))
+        return ctx.makeImage() ?? image
+    }
+
+    /// Verkleinert ein Bild so, dass die längere Seite höchstens `maxPixel` hat.
+    public static func downscaled(_ image: CGImage, maxPixel: Int) -> CGImage {
+        let longest = max(image.width, image.height)
+        guard longest > maxPixel else { return image }
+        let scale = Double(maxPixel) / Double(longest)
+        let width = max(Int(Double(image.width) * scale), 1), height = max(Int(Double(image.height) * scale), 1)
+        guard let ctx = CGContext(data: nil, width: width, height: height, bitsPerComponent: 8, bytesPerRow: 0,
+                                  space: CGColorSpaceCreateDeviceGray(), bitmapInfo: CGImageAlphaInfo.none.rawValue) else {
+            return image
+        }
+        ctx.interpolationQuality = .high
+        ctx.draw(image, in: CGRect(x: 0, y: 0, width: width, height: height))
         return ctx.makeImage() ?? image
     }
 }

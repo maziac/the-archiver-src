@@ -8,6 +8,8 @@ enum SettingsKey {
     static let archivePath = "archivePath"
     static let dpi = "dpi"
     static let rotateBacks = "rotateBacks"
+    static let autoOrient = "autoOrient"
+    static let singleSource = "singleSource"
     static let inboxPath = "inboxPath"
     // Kompression (Werte: rawValue von SizePreset / ColorMode)
     static let scanPreset = "scanPreset"
@@ -32,6 +34,7 @@ enum SettingsKey {
             inboxPath: defaultInboxPath,
             dpi: 300,
             rotateBacks: false,
+            autoOrient: true,
             scanPreset: SizePreset.kb150.rawValue,
             scanColorMode: ColorMode.gray.rawValue,
             pdfPreset: SizePreset.original.rawValue,

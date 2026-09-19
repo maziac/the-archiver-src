@@ -4,16 +4,41 @@ import Observation
 import ScanArchivCore
 
 struct ScannedPage: Identifiable {
-    enum Kind { case front, back }
+    enum Kind { case front, back, single }
 
     let id = UUID()
     let url: URL
     let kind: Kind
-    let thumbnail: NSImage
-    var rotated180: Bool
+    /// Miniatur des Scans in Originallage
+    let baseThumbnail: CGImage?
+    /// Miniatur in der aktuellen Drehung
+    private(set) var thumbnail: NSImage
+    /// Drehung im Uhrzeigersinn (0, 90, 180, 270)
+    private(set) var rotation: Int
+    /// Ausrichtung wurde schon automatisch geprüft
+    var orientationChecked = false
+    /// Drehung stammt von der automatischen Erkennung
+    var autoRotated = false
+    /// Vom Benutzer gedreht – die Erkennung ändert dann nichts mehr
+    var manuallyRotated = false
+
+    init(url: URL, kind: Kind, rotation: Int) {
+        self.url = url
+        self.kind = kind
+        baseThumbnail = ImageTools.thumbnail(url)
+        self.rotation = 0
+        thumbnail = NSImage()
+        setRotation(rotation)
+    }
+
+    mutating func setRotation(_ degrees: Int) {
+        rotation = (degrees % 360 + 360) % 360
+        thumbnail = baseThumbnail.map { NSImage(cgImage: ImageTools.rotated($0, clockwise: rotation), size: .zero) } ?? NSImage()
+    }
 }
 
-/// Führt durch den zweiteiligen Scan: Vorderseiten → wenden → Rückseiten → Vorschau → Speichern.
+/// Führt durch den Scan: als Stapel in zwei Durchgängen (Vorderseiten → wenden → Rückseiten) oder
+/// Seite für Seite; danach Vorschau → Speichern.
 /// (Dateien werden über den Eingang vollautomatisch importiert, siehe `InboxService`.)
 @Observable
 @MainActor
@@ -24,6 +49,10 @@ final class ScanSession {
         case awaitingFlip
         case scanningBacks
         case countMismatch(fronts: Int, backs: Int)
+        /// Seite für Seite: eine Seite wird gescannt
+        case scanningSingle
+        /// Seite für Seite: gescannt, noch eine?
+        case singleNext
         case preview
         case processing(String)
         case saved(URL)
@@ -47,6 +76,12 @@ final class ScanSession {
     private(set) var fronts: [URL] = []
     private(set) var backs: [URL] = []
     var pages: [ScannedPage] = []
+    /// Quelle beim Scannen Seite für Seite (gemerkt)
+    var singleSource: ScanSource = ScanSource(rawValue: UserDefaults.standard.string(forKey: SettingsKey.singleSource) ?? "") ?? .flatbed {
+        didSet { UserDefaults.standard.set(singleSource.rawValue, forKey: SettingsKey.singleSource) }
+    }
+    /// Fehler beim letzten Einzelscan (die bisherigen Seiten bleiben erhalten)
+    private(set) var singleError: String?
 
     // Metadaten-Vorschlag (bearbeitbar in der Vorschau)
     var title = "" { didSet { if !applying { titleEdited = true } } }
@@ -62,7 +97,9 @@ final class ScanSession {
     @ObservationIgnored private var summaryEdited = false
     @ObservationIgnored private var applying = false
     /// OCR-Ergebnis je Seite, gültig für die gespeicherte Drehung
-    @ObservationIgnored private var ocrCache: [UUID: (rotated: Bool, lines: [OCRLine])] = [:]
+    @ObservationIgnored private var ocrCache: [UUID: (rotation: Int, lines: [OCRLine])] = [:]
+    /// Text, zu dem der aktuelle Vorschlag gehört (dann muss nicht erneut gefragt werden)
+    @ObservationIgnored private var suggestedText: String?
     @ObservationIgnored private var analysisTask: Task<Void, Never>?
     @ObservationIgnored private var backgroundOCRTask: Task<Void, Never>?
 
@@ -86,6 +123,7 @@ final class ScanSession {
     private var scanColorMode: ColorMode { SettingsKey.colorMode(SettingsKey.scanColorMode) }
     /// Farbe nur bei „Farbe/Original“; Graustufen und Schwarz-Weiß werden grau gescannt
     private var color: Bool { scanColorMode == .original }
+    private var autoOrient: Bool { UserDefaults.standard.bool(forKey: SettingsKey.autoOrient) }
 
     // MARK: Scannen
 
@@ -128,21 +166,51 @@ final class ScanSession {
 
     func backToPreview() { phase = .preview }
 
-    func cancelScan() { scanner.cancelScan() }
+    // MARK: Seite für Seite
 
-    private func buildPreview() {
-        let rotateBacks = UserDefaults.standard.bool(forKey: SettingsKey.rotateBacks)
-        let frontPages = fronts.map { makePage($0, kind: .front, rotated: false) }
-        let backPages = backs.map { makePage($0, kind: .back, rotated: rotateBacks) }
-        pages = PageOrder.interleave(fronts: frontPages, backsScannedReversed: backPages)
+    /// Scannt eine weitere Seite und hängt sie hinten an (auch aus der Vorschau heraus).
+    func scanSinglePage() {
+        let source = scanner.sources.contains(singleSource) ? singleSource : (scanner.sources.first ?? singleSource)
+        singleError = nil
+        phase = .scanningSingle
+        let folder = workFolder.appendingPathComponent("einzeln-\(UUID().uuidString.prefix(6))")
+        Task {
+            do {
+                let urls = try await scanner.scan(source: source, dpi: dpi, color: color, into: folder)
+                if urls.isEmpty { singleError = "Es wurde keine Seite gescannt." }
+                pages += urls.map { ScannedPage(url: $0, kind: .single, rotation: 0) }
+                startAnalysis()  // Texterkennung läuft schon, während die nächste Seite aufgelegt wird
+            } catch {
+                singleError = error.localizedDescription
+            }
+            phase = .singleNext
+        }
+    }
+
+    /// Letzte Seite verwerfen und erneut scannen.
+    func rescanLastPage() {
+        if let last = pages.last { remove(last) }
+        scanSinglePage()
+    }
+
+    func finishSingle() {
+        singleError = nil
+        guard !pages.isEmpty else { reset(); return }
         phase = .preview
         Summarizer.prewarm()
         startAnalysis()
     }
 
-    private func makePage(_ url: URL, kind: ScannedPage.Kind, rotated: Bool) -> ScannedPage {
-        let thumb = ImageTools.thumbnail(url).map { NSImage(cgImage: $0, size: .zero) } ?? NSImage()
-        return ScannedPage(url: url, kind: kind, thumbnail: thumb, rotated180: rotated)
+    func cancelScan() { scanner.cancelScan() }
+
+    private func buildPreview() {
+        let rotateBacks = UserDefaults.standard.bool(forKey: SettingsKey.rotateBacks)
+        let frontPages = fronts.map { ScannedPage(url: $0, kind: .front, rotation: 0) }
+        let backPages = backs.map { ScannedPage(url: $0, kind: .back, rotation: rotateBacks ? 180 : 0) }
+        pages = PageOrder.interleave(fronts: frontPages, backsScannedReversed: backPages)
+        phase = .preview
+        Summarizer.prewarm()
+        startAnalysis()
     }
 
     // MARK: Zurücksetzen / Bearbeiten
@@ -156,6 +224,8 @@ final class ScanSession {
         backs = []
         pages = []
         ocrCache = [:]
+        suggestedText = nil
+        singleError = nil
         withoutEditTracking {
             title = ""
             summary = ""
@@ -168,10 +238,22 @@ final class ScanSession {
         phase = .ready
     }
 
-    func toggleRotation(_ page: ScannedPage) {
+    /// Dreht eine Seite um `degrees` im Uhrzeigersinn (negativ = gegen den Uhrzeigersinn).
+    func rotate(_ page: ScannedPage, by degrees: Int) {
         guard let i = pages.firstIndex(where: { $0.id == page.id }) else { return }
-        pages[i].rotated180.toggle()
+        pages[i].setRotation(pages[i].rotation + degrees)
+        pages[i].manuallyRotated = true
+        pages[i].autoRotated = false
         startAnalysis()  // gedrehte Seite neu erkennen, Vorschlag ggf. verbessern
+    }
+
+    /// Verschiebt eine Seite an die Stelle einer anderen (Ziehen in der Vorschau).
+    func move(pageID: UUID, to target: UUID) {
+        guard pageID != target,
+              let from = pages.firstIndex(where: { $0.id == pageID }),
+              let to = pages.firstIndex(where: { $0.id == target }) else { return }
+        pages.move(fromOffsets: IndexSet(integer: from), toOffset: to > from ? to + 1 : to)
+        startAnalysis()  // erste Seiten können sich geändert haben
     }
 
     func remove(_ page: ScannedPage) {
@@ -181,6 +263,7 @@ final class ScanSession {
 
     /// Verwirft eigene Eingaben und fragt Apple Intelligence erneut.
     func resuggest() {
+        suggestedText = nil
         titleEdited = false
         summaryEdited = false
         if dateSource == .manual { dateSource = .today }
@@ -200,24 +283,26 @@ final class ScanSession {
     private func startAnalysis() {
         analysisTask?.cancel()
         backgroundOCRTask?.cancel()
-        let snapshot = pages
-        let first = Array(snapshot.prefix(Self.suggestionPageCount))
+        let ids = pages.map(\.id)
+        let first = Array(ids.prefix(Self.suggestionPageCount))
 
         analysisTask = Task {
-            suggestionState = .recognizing
+            if suggestedText == nil || suggestionState != .done { suggestionState = .recognizing }
             var texts: [String] = []
-            for page in first {
-                if let lines = await ocrLines(for: page) { texts.append(lines.map(\.text).joined(separator: "\n")) }
+            for id in first {
+                if let lines = await prepare(id) { texts.append(lines.map(\.text).joined(separator: "\n")) }
                 if Task.isCancelled { return }
             }
             // restliche Seiten erst jetzt, damit sie der Vorschlags-OCR nicht in die Quere kommen
             backgroundOCRTask = Task {
-                for page in snapshot.dropFirst(Self.suggestionPageCount) {
+                for id in ids.dropFirst(Self.suggestionPageCount) {
                     if Task.isCancelled { return }
-                    _ = await ocrLines(for: page)
+                    _ = await prepare(id)
                 }
             }
             let text = texts.joined(separator: "\n\n")
+            // gleicher Text wie beim letzten Vorschlag (z. B. nur hinten Seiten dazu) → nichts zu tun
+            if text == suggestedText, suggestionState == .done { return }
 
             if dateSource != .manual {
                 applyDate(DateExtractor.bestGuess(in: texts.first ?? "") ?? DateExtractor.bestGuess(in: text))
@@ -242,6 +327,7 @@ final class ScanSession {
                     applyDate(date)
                     dateFromAI = true
                 }
+                suggestedText = text
                 suggestionState = .done
             } catch {
                 if !Task.isCancelled { suggestionState = .failed(error.localizedDescription) }
@@ -255,25 +341,43 @@ final class ScanSession {
         dateFromAI = false
     }
 
+    /// Richtet eine Seite (einmalig) automatisch aus und erkennt ihren Text in der aktuellen Drehung.
+    private func prepare(_ id: UUID) async -> [OCRLine]? {
+        guard let page = pages.first(where: { $0.id == id }) else { return nil }
+        if autoOrient, !page.orientationChecked, !page.manuallyRotated {
+            let detected = try? await OCRService.detectOrientation(Self.loadImage(url: page.url, rotation: 0))
+            if Task.isCancelled { return nil }
+            if let i = pages.firstIndex(where: { $0.id == id }) {
+                pages[i].orientationChecked = true
+                if let detected, !pages[i].manuallyRotated, detected != pages[i].rotation {
+                    pages[i].setRotation(detected)
+                    pages[i].autoRotated = true
+                }
+            }
+        }
+        guard let current = pages.first(where: { $0.id == id }) else { return nil }
+        return await ocrLines(for: current)
+    }
+
     /// OCR einer Seite in ihrer aktuellen Drehung, aus dem Cache oder neu erkannt.
     private func ocrLines(for page: ScannedPage) async -> [OCRLine]? {
-        if let cached = ocrCache[page.id], cached.rotated == page.rotated180 { return cached.lines }
-        let lines = try? await Self.recognize(url: page.url, rotated: page.rotated180)
-        if let lines { ocrCache[page.id] = (page.rotated180, lines) }
+        if let cached = ocrCache[page.id], cached.rotation == page.rotation { return cached.lines }
+        let lines = try? await Self.recognize(url: page.url, rotation: page.rotation)
+        if let lines { ocrCache[page.id] = (page.rotation, lines) }
         return lines
     }
 
-    nonisolated private static func loadImage(url: URL, rotated: Bool) async throws -> CGImage {
+    nonisolated private static func loadImage(url: URL, rotation: Int) async throws -> CGImage {
         try await Task.detached(priority: .userInitiated) { () throws -> CGImage in
             guard let image = ImageTools.load(url) else {
                 throw ScannerError.scanFailed("Seitenbild \(url.lastPathComponent) nicht lesbar.")
             }
-            return rotated ? ImageTools.rotated180(image) : image
+            return ImageTools.rotated(image, clockwise: rotation)
         }.value
     }
 
-    nonisolated private static func recognize(url: URL, rotated: Bool) async throws -> [OCRLine] {
-        try await OCRService.recognize(loadImage(url: url, rotated: rotated))
+    nonisolated private static func recognize(url: URL, rotation: Int) async throws -> [OCRLine] {
+        try await OCRService.recognize(loadImage(url: url, rotation: rotation))
     }
 
     // MARK: Speichern
@@ -319,11 +423,11 @@ final class ScanSession {
                 var texts: [String] = []
                 for (i, page) in snapshot.enumerated() {
                     let lines: [OCRLine]
-                    if let cached = ocrCache[page.id], cached.rotated == page.rotated180 {
+                    if let cached = ocrCache[page.id], cached.rotation == page.rotation {
                         lines = cached.lines
                     } else {
                         phase = .processing("Texterkennung Seite \(i + 1) von \(snapshot.count) …")
-                        lines = try await Self.recognize(url: page.url, rotated: page.rotated180)
+                        lines = try await Self.recognize(url: page.url, rotation: page.rotation)
                     }
                     let text = lines.map(\.text).joined(separator: "\n")
                     let hasText = DocumentIssue.hasText(text)
@@ -331,7 +435,7 @@ final class ScanSession {
                     textSources.append(hasText ? .ocr : .none)
                     texts.append(text)
                     phase = .processing("Seite \(i + 1) von \(snapshot.count) wird komprimiert …")
-                    let image = try await Self.loadImage(url: page.url, rotated: page.rotated180)
+                    let image = try await Self.loadImage(url: page.url, rotation: page.rotation)
                     let size = CGSize(width: Double(image.width) / dpi * 72, height: Double(image.height) / dpi * 72)
                     let encoded = await Task.detached {
                         PageCompressor.encode(image, pageSize: size, preset: preset, color: colorMode)

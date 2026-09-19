@@ -8,6 +8,7 @@ struct SettingsView: View {
     @AppStorage(SettingsKey.archivePath) private var archivePath = SettingsKey.defaultArchivePath
     @AppStorage(SettingsKey.dpi) private var dpi = 300
     @AppStorage(SettingsKey.rotateBacks) private var rotateBacks = false
+    @AppStorage(SettingsKey.autoOrient) private var autoOrient = true
     @AppStorage(SettingsKey.scanPreset) private var scanPreset = SizePreset.kb150
     @AppStorage(SettingsKey.scanColorMode) private var scanColorMode = ColorMode.gray
     @AppStorage(SettingsKey.pdfPreset) private var pdfPreset = SizePreset.original
@@ -58,8 +59,12 @@ struct SettingsView: View {
                 Picker("Farbe", selection: $scanColorMode) {
                     ForEach(ColorMode.allCases, id: \.self) { Text($0 == .original ? "Farbe" : $0.label).tag($0) }
                 }
+                Toggle("Ausrichtung automatisch erkennen", isOn: $autoOrient)
+                Text("Seiten, deren Text quer oder auf dem Kopf steht, werden in der Vorschau aufrecht gedreht. Seiten ohne erkennbaren Text bleiben, wie sie sind.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
                 Toggle("Rückseiten automatisch um 180° drehen", isOn: $rotateBacks)
-                Text("Einschalten, wenn der Stapel über die kurze Kante gewendet wird und die Rückseiten auf dem Kopf stehen.")
+                Text("Einschalten, wenn der Stapel über die kurze Kante gewendet wird und die Rückseiten auf dem Kopf stehen. Gilt für Rückseiten, bei denen die automatische Erkennung nichts findet (z. B. ohne Text).")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                 presetPicker("Größe", selection: $scanPreset)

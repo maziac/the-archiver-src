@@ -31,9 +31,20 @@ Icon neu erzeugen: `swift scripts/make_icon.swift`
 1. Stapel mit den Vorderseiten nach oben einlegen und **Vorderseiten scannen** klicken.
 2. Stapel aus der Ablage nehmen, **als Ganzes umdrehen** (Reihenfolge nicht ändern) und wieder einlegen,
    dann **Rückseiten scannen** klicken. Bei einseitigen Dokumenten: **Nur einseitig – fertig**.
-3. Vorschau prüfen: Ein Klick dreht eine Seite um 180°, übers Kontextmenü lässt sich eine Seite entfernen.
-   Oben stehen die Vorschläge für Datum, Titel und Beschreibung. Sie sind nach wenigen Sekunden da
-   und lassen sich überschreiben. Dann **Speichern**.
+3. Vorschau prüfen: Ein Klick dreht eine Seite um 180°, das Kontextmenü dreht um 90° oder entfernt
+   die Seite. **Ziehen** verschiebt eine Seite an eine andere Stelle. **Seite scannen** hängt eine
+   weitere Seite an. Oben stehen die Vorschläge für Datum, Titel und Beschreibung. Sie sind nach
+   wenigen Sekunden da und lassen sich überschreiben. Dann **Speichern**.
+
+**Seite für Seite:** Für gebundene, empfindliche oder sehr unterschiedliche Blätter. Nach jeder Seite
+fragt das Programm, ob noch eine kommt (**Nächste Seite scannen**, **Letzte Seite wiederholen**,
+**Fertig**). Gescannt wird wahlweise über das **Vorlagenglas** oder den **Einzug**; die Wahl wird
+gemerkt. Die Texterkennung läuft schon, während die nächste Seite aufgelegt wird.
+
+**Automatische Ausrichtung:** Steht der Text einer Seite quer oder auf dem Kopf, wird sie in der
+Vorschau aufrecht gedreht (Symbol ↻ an der Miniatur). Dazu liest eine schnelle Texterkennung die
+Seite in allen vier Richtungen und wählt die, in der echte Wörter herauskommen. Seiten ohne
+erkennbaren Text bleiben unverändert. Abschaltbar in den Einstellungen.
 
 ## Eingang (automatischer Import)
 
@@ -133,7 +144,8 @@ Die Vorschläge für Titel und Beschreibung brauchen macOS 26 mit eingeschaltete
 Intelligence funktioniert alles andere weiter, und das Datum wird trotzdem aus dem Text erkannt.
 
 Stehen alle Rückseiten auf dem Kopf (Stapel über die kurze Kante gewendet), in den Einstellungen (⌘,)
-**Rückseiten automatisch um 180° drehen** einschalten.
+**Rückseiten automatisch um 180° drehen** einschalten. Mit der automatischen Ausrichtung ist das nur
+noch für Rückseiten ohne erkennbaren Text nötig.
 
 ## Kompression
 

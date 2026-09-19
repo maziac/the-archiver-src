@@ -1,17 +1,20 @@
 import SwiftUI
 
-/// Miniaturen in der fertigen Reihenfolge; Seiten lassen sich drehen oder entfernen.
+/// Miniaturen in der fertigen Reihenfolge; Seiten lassen sich drehen, verschieben oder entfernen.
 struct PagePreviewView: View {
     @Bindable var session: ScanSession
 
     var body: some View {
         VStack(spacing: 0) {
             HStack {
-                Text("\(session.pages.count) Seite(n) in Originalreihenfolge")
+                Text("\(session.pages.count) Seite(n)")
                     .font(.headline)
-                Text("Klick auf eine Seite dreht sie um 180°.")
+                Text("Klick dreht um 180°, Rechtsklick um 90°. Ziehen ändert die Reihenfolge.")
                     .foregroundStyle(.secondary)
                 Spacer()
+                Button("Seite scannen", systemImage: "plus.viewfinder") { session.scanSinglePage() }
+                    .help("Eine weitere Seite scannen und hinten anhängen")
+                    .disabled(!session.scanner.isReady)
                 Button("Verwerfen", role: .destructive) { session.reset() }
                 Button("Speichern") { session.save() }
                     .keyboardShortcut(.defaultAction)
@@ -26,12 +29,7 @@ struct PagePreviewView: View {
             ScrollView {
                 LazyVGrid(columns: [GridItem(.adaptive(minimum: 150), spacing: 16)], spacing: 16) {
                     ForEach(Array(session.pages.enumerated()), id: \.element.id) { index, page in
-                        PageThumb(page: page, number: index + 1)
-                            .onTapGesture { session.toggleRotation(page) }
-                            .contextMenu {
-                                Button("Um 180° drehen") { session.toggleRotation(page) }
-                                Button("Seite entfernen", role: .destructive) { session.remove(page) }
-                            }
+                        PageThumb(session: session, page: page, number: index + 1)
                     }
                 }
                 .padding(16)
@@ -109,13 +107,16 @@ private struct MetadataForm: View {
 }
 
 private struct PageThumb: View {
+    let session: ScanSession
     let page: ScannedPage
     let number: Int
+    @State private var dropTargeted = false
 
     private var label: String {
         switch page.kind {
         case .front: return "Seite \(number) · Vorderseite"
         case .back: return "Seite \(number) · Rückseite"
+        case .single: return "Seite \(number)"
         }
     }
 
@@ -124,15 +125,47 @@ private struct PageThumb: View {
             Image(nsImage: page.thumbnail)
                 .resizable()
                 .aspectRatio(contentMode: .fit)
-                .rotationEffect(.degrees(page.rotated180 ? 180 : 0))
                 .frame(height: 200)
                 .background(Color.white)
                 .shadow(radius: 2)
-                .animation(.easeInOut(duration: 0.2), value: page.rotated180)
+                .overlay(alignment: .topTrailing) {
+                    if page.autoRotated {
+                        Image(systemName: "arrow.clockwise.circle.fill")
+                            .font(.title3)
+                            .foregroundStyle(.white, Color.accentColor)
+                            .padding(4)
+                            .help("Automatisch aufrecht gedreht (\(page.rotation)°)")
+                    }
+                }
             Text(label)
                 .font(.caption)
                 .foregroundStyle(.secondary)
         }
+        .padding(6)
+        .background {
+            RoundedRectangle(cornerRadius: 8)
+                .strokeBorder(Color.accentColor, lineWidth: 3)
+                .opacity(dropTargeted ? 1 : 0)
+        }
         .contentShape(Rectangle())
+        .onTapGesture { session.rotate(page, by: 180) }
+        .contextMenu {
+            Button("90° nach rechts drehen", systemImage: "rotate.right") { session.rotate(page, by: 90) }
+            Button("90° nach links drehen", systemImage: "rotate.left") { session.rotate(page, by: -90) }
+            Button("Um 180° drehen") { session.rotate(page, by: 180) }
+            Divider()
+            Button("Seite entfernen", role: .destructive) { session.remove(page) }
+        }
+        .draggable(page.id.uuidString) {
+            Image(nsImage: page.thumbnail)
+                .resizable()
+                .aspectRatio(contentMode: .fit)
+                .frame(height: 120)
+        }
+        .dropDestination(for: String.self) { items, _ in
+            guard let dragged = items.first.flatMap(UUID.init(uuidString:)) else { return false }
+            withAnimation { session.move(pageID: dragged, to: page.id) }
+            return true
+        } isTargeted: { dropTargeted = $0 }
     }
 }

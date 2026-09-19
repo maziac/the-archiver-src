@@ -20,14 +20,26 @@ enum ScannerError: LocalizedError {
     }
 }
 
-/// Steuert Netzwerk-/USB-Scanner über ImageCaptureCore und scannt über den Vorlageneinzug (ADF).
+/// Woher gescannt wird.
+enum ScanSource: String, CaseIterable, Identifiable {
+    case feeder, flatbed
+
+    var id: String { rawValue }
+    var label: String { self == .feeder ? "Einzug" : "Vorlagenglas" }
+    var unitType: ICScannerFunctionalUnitType { self == .feeder ? .documentFeeder : .flatbed }
+}
+
+/// Steuert Netzwerk-/USB-Scanner über ImageCaptureCore: Stapel über den Vorlageneinzug (ADF),
+/// einzelne Seiten wahlweise über Einzug oder Vorlagenglas.
 @Observable
 @MainActor
 final class ScannerService: NSObject {
     private(set) var scanners: [ICScannerDevice] = []
     private(set) var selected: ICScannerDevice?
-    /// Session offen und Einzug ausgewählt
+    /// Session offen und eine Scanfunktion ausgewählt
     private(set) var isReady = false
+    /// Quellen, die der Scanner anbietet
+    private(set) var sources: [ScanSource] = []
     private(set) var statusText = "Suche Scanner …" {
         didSet { ScannerService.log.info("\(self.statusText, privacy: .public)") }
     }
@@ -38,6 +50,9 @@ final class ScannerService: NSObject {
     @ObservationIgnored private let browser = ICDeviceBrowser()
     @ObservationIgnored private var scannedURLs: [URL] = []
     @ObservationIgnored private var continuation: CheckedContinuation<[URL], Error>?
+    /// Wartet auf den Wechsel zwischen Einzug und Vorlagenglas
+    @ObservationIgnored private var unitContinuation: CheckedContinuation<Void, Error>?
+    @ObservationIgnored private var requestedUnit: ICScannerFunctionalUnitType?
 
     override init() {
         super.init()
@@ -55,6 +70,7 @@ final class ScannerService: NSObject {
         if let old = selected, old.hasOpenSession { old.requestCloseSession() }
         selected = scanner
         isReady = false
+        sources = []
         statusText = "Verbinde mit \(scanner.name ?? "Scanner") …"
         scanner.delegate = self
         scanner.requestOpenSession()
@@ -62,19 +78,39 @@ final class ScannerService: NSObject {
 
     /// Scannt alle Blätter im Einzug und liefert die Seitenbilder (PNG) in Scan-Reihenfolge.
     func scanFeeder(dpi: Int, color: Bool, into folder: URL) async throws -> [URL] {
+        try await scan(source: .feeder, dpi: dpi, color: color, into: folder)
+    }
+
+    /// Scannt über die gewählte Quelle: beim Einzug alle eingelegten Blätter, beim Vorlagenglas eine A4-Seite.
+    func scan(source: ScanSource, dpi: Int, color: Bool, into folder: URL) async throws -> [URL] {
         guard let scanner = selected else { throw ScannerError.noScanner }
-        guard isReady, let unit = scanner.selectedFunctionalUnit as? ICScannerFunctionalUnitDocumentFeeder else {
-            throw ScannerError.notReady
+        guard isReady else { throw ScannerError.notReady }
+        guard continuation == nil, unitContinuation == nil else { throw ScannerError.busy }
+        guard sources.contains(source) else {
+            throw ScannerError.scanFailed(source == .feeder ? "Dieser Scanner hat keinen Vorlageneinzug."
+                                                            : "Dieser Scanner hat kein Vorlagenglas.")
         }
-        guard continuation == nil else { throw ScannerError.busy }
+        if scanner.selectedFunctionalUnit.type != source.unitType {
+            statusText = "Wechsle zu \(source.label) …"
+            try await selectUnit(source.unitType, on: scanner)
+        }
+        let unit = scanner.selectedFunctionalUnit
 
         let supported = Array(unit.supportedResolutions)
         unit.resolution = supported.min(by: { abs($0 - dpi) < abs($1 - dpi) }) ?? dpi
         unit.bitDepth = .depth8Bits
         unit.pixelDataType = color ? .RGB : .gray
         unit.measurementUnit = .centimeters
-        unit.documentType = .typeA4
-        unit.scanArea = NSRect(origin: .zero, size: unit.documentSize)
+        if let feeder = unit as? ICScannerFunctionalUnitDocumentFeeder {
+            feeder.documentType = .typeA4
+            unit.scanArea = NSRect(origin: .zero, size: feeder.documentSize)
+        } else if let flatbed = unit as? ICScannerFunctionalUnitFlatbed {
+            flatbed.documentType = .typeA4
+            // A4 ab der Anlegeecke, höchstens so groß wie das Glas
+            let a4 = flatbed.documentSize.width > 0 ? flatbed.documentSize : NSSize(width: 21.0, height: 29.7)
+            let glass = unit.physicalSize
+            unit.scanArea = NSRect(x: 0, y: 0, width: min(a4.width, glass.width), height: min(a4.height, glass.height))
+        }
 
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         scanner.transferMode = .fileBased
@@ -91,6 +127,22 @@ final class ScannerService: NSObject {
         }
     }
 
+    /// Wählt Einzug oder Vorlagenglas und wartet auf die Bestätigung des Scanners (höchstens 20 s).
+    private func selectUnit(_ type: ICScannerFunctionalUnitType, on scanner: ICScannerDevice) async throws {
+        try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Void, Error>) in
+            unitContinuation = cont
+            requestedUnit = type
+            scanner.requestSelect(type)
+            Task { [weak self] in
+                try? await Task.sleep(for: .seconds(20))
+                guard let self, let pending = self.unitContinuation else { return }
+                self.unitContinuation = nil
+                self.statusText = "Bereit"
+                pending.resume(throwing: ScannerError.scanFailed("Der Scanner hat nicht auf den Wechsel der Scanquelle reagiert."))
+            }
+        }
+    }
+
     func cancelScan() {
         selected?.cancelScan()
     }
@@ -102,16 +154,17 @@ final class ScannerService: NSObject {
         scannedURLs = []
         if let error, urls.isEmpty {
             statusText = "Scan fehlgeschlagen"
-            cont.resume(throwing: ScannerError.scanFailed(Self.describe(error)))
+            let flatbed = selected?.selectedFunctionalUnit.type == .flatbed
+            cont.resume(throwing: ScannerError.scanFailed(Self.describe(error, flatbed: flatbed)))
         } else {
             statusText = "Bereit"
             cont.resume(returning: urls)
         }
     }
 
-    private static func describe(_ error: Error) -> String {
+    private static func describe(_ error: Error, flatbed: Bool) -> String {
         let code = (error as NSError).code
-        return "Scan fehlgeschlagen (Code \(code)). Liegt Papier im Einzug?"
+        return "Scan fehlgeschlagen (Code \(code)). " + (flatbed ? "Ist die Klappe geschlossen?" : "Liegt Papier im Einzug?")
     }
 }
 
@@ -130,7 +183,12 @@ extension ScannerService: ICDeviceBrowserDelegate {
             if device === selected {
                 selected = nil
                 isReady = false
+                sources = []
                 statusText = "Scanner getrennt"
+                if let pending = unitContinuation {
+                    unitContinuation = nil
+                    pending.resume(throwing: ScannerError.scanFailed("Scanner getrennt"))
+                }
                 finishScan(error: ScannerError.scanFailed("Scanner getrennt"))
                 if let next = scanners.first { select(next) }
             }
@@ -157,14 +215,26 @@ extension ScannerService: ICScannerDeviceDelegate {
     nonisolated func scannerDevice(_ scanner: ICScannerDevice, didSelect functionalUnit: ICScannerFunctionalUnit, error: Error?) {
         MainActor.assumeIsolated {
             guard scanner === selected else { return }
-            // Nach dem Öffnen ist der Flachbettscanner aktiv; erst dann lässt sich der Einzug wählen.
-            if functionalUnit.type == .documentFeeder, error == nil {
-                isReady = true
-                statusText = "Bereit"
-            } else if scanner.availableFunctionalUnitTypes.contains(NSNumber(value: ICScannerFunctionalUnitType.documentFeeder.rawValue)) {
+            let available = Set(scanner.availableFunctionalUnitTypes.map(\.uintValue))
+            sources = ScanSource.allCases.filter { available.contains($0.unitType.rawValue) }
+            // Wechsel für einen Scan angefordert
+            if let pending = unitContinuation {
+                unitContinuation = nil
+                if error == nil, functionalUnit.type == requestedUnit {
+                    pending.resume()
+                } else {
+                    statusText = "Bereit"
+                    pending.resume(throwing: ScannerError.scanFailed(
+                        "Scanquelle ließ sich nicht wählen\(error.map { " (\($0.localizedDescription))" } ?? "")."))
+                }
+                return
+            }
+            // Nach dem Öffnen ist der Flachbettscanner aktiv; für Stapel wird der Einzug vorausgewählt.
+            if functionalUnit.type != .documentFeeder, sources.contains(.feeder) {
                 scanner.requestSelect(.documentFeeder)
             } else if error == nil {
-                statusText = "Dieser Scanner hat keinen Vorlageneinzug."
+                isReady = true
+                statusText = sources.contains(.feeder) ? "Bereit" : "Bereit (nur Vorlagenglas)"
             }
         }
     }

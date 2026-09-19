@@ -60,7 +60,7 @@ struct ScanView: View {
 
     private var isBusy: Bool {
         switch session.phase {
-        case .scanningFronts, .scanningBacks, .processing: return true
+        case .scanningFronts, .scanningBacks, .scanningSingle, .processing: return true
         default: return false
         }
     }
@@ -75,11 +75,16 @@ struct ScanView: View {
                 step: "Schritt 1 von 2",
                 icon: "doc.on.doc",
                 title: "Vorderseiten scannen",
-                text: "Lege den Stapel mit den Vorderseiten nach oben in den Einzug, die erste Seite obenauf.\nVorhandene PDFs oder Bilder kannst du einfach hierher oder in den Tab „Eingang“ ziehen – sie werden automatisch verarbeitet.")
+                text: "Lege den Stapel mit den Vorderseiten nach oben in den Einzug, die erste Seite obenauf.\nOder scanne Seite für Seite – etwa für gebundene, empfindliche oder sehr unterschiedliche Blätter.\nVorhandene PDFs oder Bilder kannst du einfach hierher oder in den Tab „Eingang“ ziehen – sie werden automatisch verarbeitet.")
             {
+                Button("Seite für Seite …") { session.scanSinglePage() }
+                    .help("Jede Seite einzeln scannen; nach jeder Seite wird gefragt, ob noch eine kommt")
+                    .disabled(!scanner.isReady || scanner.sources.isEmpty)
                 Button("Vorderseiten scannen") { session.scanFronts() }
                     .keyboardShortcut(.defaultAction)
-                    .disabled(!scanner.isReady)
+                    .disabled(!scanner.isReady || !scanner.sources.contains(.feeder))
+            } footer: {
+                sourcePicker
             }
             .dropDestination(for: URL.self) { urls, _ in
                 guard !urls.isEmpty else { return false }
@@ -95,10 +100,10 @@ struct ScanView: View {
                 }
             }
 
-        case .scanningFronts, .scanningBacks:
+        case .scanningFronts, .scanningBacks, .scanningSingle:
             VStack(spacing: 16) {
                 ProgressView()
-                Text(session.phase == .scanningFronts ? "Vorderseiten werden gescannt …" : "Rückseiten werden gescannt …")
+                Text(scanningTitle)
                     .font(.title2)
                 Text("\(scanner.pagesInCurrentScan) Seite(n)")
                     .foregroundStyle(.secondary)
@@ -130,6 +135,40 @@ struct ScanView: View {
                 Button("Trotzdem zusammenführen") { session.acceptMismatch() }
                 Button("Rückseiten erneut scannen") { session.scanBacks() }
                     .keyboardShortcut(.defaultAction)
+            }
+
+        case .singleNext:
+            Instruction(
+                step: "Seite für Seite",
+                icon: session.singleError == nil ? "doc.badge.plus" : "exclamationmark.triangle",
+                title: session.singleError == nil
+                    ? "Seite \(session.pages.count) gescannt – noch eine?"
+                    : "Seite konnte nicht gescannt werden",
+                text: session.singleError.map { "\($0)\nBisher \(session.pages.count) Seite(n)." }
+                    ?? "Lege die nächste Seite auf (\(session.singleSource.label)) und scanne sie – oder beende das Dokument.")
+            {
+                Button(session.pages.isEmpty ? "Abbrechen" : "Alles verwerfen", role: .destructive) { session.reset() }
+                if session.singleError == nil, !session.pages.isEmpty {
+                    Button("Letzte Seite wiederholen") { session.rescanLastPage() }
+                }
+                Button("Fertig") { session.finishSingle() }
+                    .disabled(session.pages.isEmpty)
+                Button("Nächste Seite scannen") { session.scanSinglePage() }
+                    .keyboardShortcut(.defaultAction)
+                    .disabled(!scanner.isReady)
+            } footer: {
+                VStack(spacing: 12) {
+                    sourcePicker
+                    if let last = session.pages.last {
+                        Image(nsImage: last.thumbnail)
+                            .resizable()
+                            .aspectRatio(contentMode: .fit)
+                            .frame(height: 160)
+                            .background(Color.white)
+                            .shadow(radius: 2)
+                            .help("Zuletzt gescannte Seite")
+                    }
+                }
             }
 
         case .preview:
@@ -165,14 +204,45 @@ struct ScanView: View {
             }
         }
     }
+
+    private var scanningTitle: String {
+        switch session.phase {
+        case .scanningFronts: return "Vorderseiten werden gescannt …"
+        case .scanningBacks: return "Rückseiten werden gescannt …"
+        default: return "Seite \(session.pages.count + 1) wird gescannt …"
+        }
+    }
+
+    /// Quelle für „Seite für Seite“ – nur wenn der Scanner Einzug und Vorlagenglas hat.
+    @ViewBuilder
+    private var sourcePicker: some View {
+        if scanner.sources.count > 1 {
+            Picker("Seite für Seite über", selection: $session.singleSource) {
+                ForEach(scanner.sources) { Text($0.label).tag($0) }
+            }
+            .pickerStyle(.segmented)
+            .fixedSize()
+        }
+    }
 }
 
-private struct Instruction<Actions: View>: View {
+private struct Instruction<Actions: View, Footer: View>: View {
     let step: String
     let icon: String
     let title: String
     let text: String
     @ViewBuilder let actions: Actions
+    @ViewBuilder var footer: Footer
+
+    init(step: String, icon: String, title: String, text: String,
+         @ViewBuilder actions: () -> Actions, @ViewBuilder footer: () -> Footer = { EmptyView() }) {
+        self.step = step
+        self.icon = icon
+        self.title = title
+        self.text = text
+        self.actions = actions()
+        self.footer = footer()
+    }
 
     var body: some View {
         VStack(spacing: 14) {
@@ -193,6 +263,7 @@ private struct Instruction<Actions: View>: View {
             HStack { actions }
                 .controlSize(.large)
                 .padding(.top, 8)
+            footer
         }
         .padding(30)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
