@@ -28,7 +28,7 @@ Icon neu erzeugen: `swift scripts/make_icon.swift`
 
 ## Bedienung
 
-1. Stapel mit den Vorderseiten nach oben einlegen und **Vorderseiten scannen** klicken.
+1. Stapel mit den Vorderseiten nach oben einlegen und **Stapel scannen** klicken.
 2. Stapel aus der Ablage nehmen, **als Ganzes umdrehen** (Reihenfolge nicht ändern) und wieder einlegen,
    dann **Rückseiten scannen** klicken. Bei einseitigen Dokumenten: **Nur einseitig – fertig**.
 3. Vorschau prüfen: Ein Klick dreht eine Seite um 180°, das Kontextmenü dreht um 90° oder entfernt
@@ -119,8 +119,11 @@ als „zu prüfen“ markiert:
 - **kein Text erkannt:** Die OCR fand auf einer Bild-Seite keinen Text.
 - **kein Titel/keine Beschreibung:** Apple Intelligence war nicht verfügbar oder hat abgelehnt.
 - **kein Datum gefunden:** Es gilt das Tagesdatum, auch im Dateinamen.
+- **Seitenreihenfolge korrigiert / prüfen** (nur Import, siehe „Seitenreihenfolge“).
 
-Solche Dokumente erscheinen im Archiv **rot** mit ⚠︎, der Tooltip nennt die Gründe. Der Schalter
+Es gibt zwei Stufen: **Fehler** (rot, ⚠︎) und **Hinweise** (gelb, ⓘ). Hinweise sind die Seitenreihenfolge
+und ein bewusst abgeschaltetes Apple Intelligence. Die Farbe richtet sich nach dem schwersten Problem;
+der Tooltip nennt die Gründe. Der Schalter
 **„Nur mit Problemen“** filtert sie, auch kombiniert mit der Suche. Die Markierung verschwindet, sobald
 du Titel bzw. Datum über „Bearbeiten …“ ergänzt, über „Titel erzeugen“ oder mit Rechtsklick →
 **„Als geprüft markieren“**. Die Vermerke stehen im PDF selbst (siehe unten).
@@ -131,6 +134,14 @@ wird dabei umbenannt. Der Stempel auf Seite 1 behält das Datum vom Speichern.
 der Vorschau übernimmt den Suchbegriff aus dem Archiv und lässt sich frei ändern. Alle Treffer sind
 gelb markiert, der aktuelle ist ausgewählt. Mit ⏎ oder ⌘G springst du zum nächsten Treffer, mit ⇧⌘G
 zum vorherigen. Die Trefferliste unter dem Dokument zeigt Seite und Textumgebung; ein Klick springt hin.
+
+**Seiten bearbeiten:** Rechtsklick → **Seiten bearbeiten …** zeigt alle Seiten eines archivierten
+Dokuments. Ziehen ändert die Reihenfolge, ein Klick dreht um 180°, ein Rechtsklick um 90°. Bei
+Dokumenten, die beim Import umsortiert wurden, steht **Reihenfolge prüfen …** ganz oben im Menü (auch
+in der Info ⓘ), und **Wie im Original** stellt die Reihenfolge der importierten Datei wieder her.
+Gespeichert wird inkrementell; der bisherige Dateiinhalt bleibt erhalten. Der Stempel gehört immer auf
+Seite 1: Wird eine andere Seite zur ersten, wird der alte Stempel weiß überdeckt, und die neue erste
+Seite bekommt denselben Stempel (Nummer und Datum bleiben). Danach ist der Reihenfolge-Vermerk erledigt.
 
 Per Rechtsklick → **Löschen …** oder mit der Entf-Taste landen Dokumente nach einer Rückfrage im
 Papierkorb und lassen sich dort wiederherstellen. Ihre Nummern werden nicht neu vergeben.
@@ -146,6 +157,25 @@ Intelligence funktioniert alles andere weiter, und das Datum wird trotzdem aus d
 Stehen alle Rückseiten auf dem Kopf (Stapel über die kurze Kante gewendet), in den Einstellungen (⌘,)
 **Rückseiten automatisch um 180° drehen** einschalten. Mit der automatischen Ausrichtung ist das nur
 noch für Rückseiten ohne erkennbaren Text nötig.
+
+## Seitenreihenfolge
+
+Stehen auf den Seiten gedruckte Seitenzahlen, prüft ScanArchiv, ob die Reihenfolge stimmt. Erkannt
+werden nur eindeutige Angaben in Kopf- oder Fußzeile: „Seite 2 von 4“, „Seite 2/4“, „Seite 2“, „S. 2“,
+„Blatt 2“, „Page 2 of 4“, „2/4“ und „- 2 -“. Nackte Zahlen zählen nicht, damit Beträge oder
+Positionsnummern keinen Fehlalarm auslösen.
+
+- **Import (Eingang):** Ist die richtige Reihenfolge eindeutig, werden die Seiten vor dem Stempeln
+  umsortiert. Der Stempel landet so auf der richtigen ersten Seite. Das Dokument wird **gelb** markiert
+  („Seitenreihenfolge laut Seitenzahlen korrigiert (vorher 1, 3, 2) – bitte prüfen“), und die Info
+  zeigt die Originalreihenfolge. Das Original bleibt dabei unverändert; nur der Seitenbaum wird
+  inkrementell neu angehängt. Eine unnummerierte erste Seite (Anschreiben) bleibt vorn. Unklare Fälle,
+  etwa zwei Briefe mit je „Seite 1 von 2“, werden nicht umsortiert, sondern nur gelb vermerkt.
+- **Scan-Vorschau:** Eine gelbe Leiste über den Seiten meldet eine vermutlich falsche Reihenfolge, mit
+  **Umsortieren** und **Ignorieren**. Die Prüfung braucht die Texterkennung aller Seiten. Klickst du
+  vorher auf **Speichern**, wird erst fertig erkannt; passt die Reihenfolge nicht, erscheint die Leiste,
+  und gespeichert wird erst beim nächsten Klick. Beim Scan wird nichts vermerkt, weil du die Seiten
+  ja gesehen hast.
 
 ## Kompression
 

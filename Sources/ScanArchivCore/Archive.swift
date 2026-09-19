@@ -5,6 +5,7 @@ public enum ArchiveError: LocalizedError {
     case cannotCreateFolder(URL, Error)
     case unreadablePDF(URL)
     case cannotWrite(URL)
+    case cannotRearrange(URL, String)
 
     public var errorDescription: String? {
         switch self {
@@ -14,6 +15,8 @@ public enum ArchiveError: LocalizedError {
             return "\(url.lastPathComponent) ist kein lesbares PDF."
         case let .cannotWrite(url):
             return "\(url.lastPathComponent) konnte nicht gespeichert werden."
+        case let .cannotRearrange(url, reason):
+            return "Die Seiten von \(url.lastPathComponent) lassen sich nicht ändern: \(reason)"
         }
     }
 }
@@ -197,6 +200,61 @@ public final class Archive: @unchecked Sendable {
         return DocumentMetadata(number: parsed?.number ?? 0, documentDate: parsed?.date ?? archivedAt, dateSource: .unknown,
                                 titleSource: hasTitle ? .ai : .none, archivedAt: archivedAt, source: .unknown,
                                 pages: pages, issues: issues, app: DocumentMetadata.legacyAppName, updatedWith: DocumentMetadata.appName)
+    }
+
+    /// Seiten umsortieren und drehen (inkrementell, siehe `PDFAppender.rearrange`). Reihenfolge-Vermerke
+    /// verschwinden, `pageOrder` bezieht sich weiter auf das Original. Das Ergebnis wird geprüft,
+    /// bevor es die Datei ersetzt.
+    /// - Returns: neue Metadaten und die Seitentexte in neuer Reihenfolge (für den Suchindex)
+    public func rearrange(url: URL, order: [Int], rotations: [Int], title: String, summary: String) throws
+        -> (meta: DocumentMetadata, pageTexts: [String]) {
+        lock.lock(); defer { lock.unlock() }
+        let data = try Data(contentsOf: url)
+        guard let pdf = PDFDocument(data: data), var meta = PDFMetadata.read(pdf) else {
+            throw ArchiveError.cannotRearrange(url, "keine ScanArchiv-Metadaten")
+        }
+        let count = pdf.pageCount
+        guard order.count == count, order.sorted() == Array(0..<count), rotations.count == count else {
+            throw ArchiveError.cannotRearrange(url, "ungültige Seitenreihenfolge")
+        }
+        let oldTexts = (0..<count).map { pdf.page(at: $0)?.string ?? "" }
+        let stampText = Archive.stampText(in: oldTexts[0]) ?? PDFBuilder.stampText(number: meta.number, date: meta.documentDate)
+
+        let identity = Array(0..<count)
+        let combined = order.map { meta.pageOrder?[$0] ?? $0 }
+        meta.pageOrder = combined == identity ? nil : combined
+        if meta.pages.count == count { meta.pages = order.map { meta.pages[$0] } }
+        meta.issues = meta.issues.filter { !$0.isPageOrder }.map { issue in
+            switch issue {
+            case let .noText(pages):
+                return .noText(pages: pages.compactMap { old in order.firstIndex(of: old - 1).map { $0 + 1 } }.sorted())
+            default: return issue
+            }
+        }
+        meta.updatedWith = DocumentMetadata.appName
+
+        let result: Data
+        do {
+            result = try PDFAppender.rearrange(data, order: order, rotations: rotations, stampText: stampText,
+                                               meta: meta, title: title, summary: summary)
+        } catch {
+            throw ArchiveError.cannotRearrange(url, error.localizedDescription)
+        }
+        // Prüfen: Seitenzahl, Stempel vorn, Metadaten, Text je Seite in neuer Reihenfolge
+        guard let check = PDFDocument(data: result), check.pageCount == count,
+              PDFMetadata.read(check) == meta,
+              check.page(at: 0)?.string?.contains(stampText) == true,
+              ImportProcessor.pagesMatch(check, expectedTexts: order.map { oldTexts[$0] }) else {
+            throw ArchiveError.cannotRearrange(url, "das Ergebnis ließ sich nicht prüfen")
+        }
+        try write(result, to: url)
+        return (meta, (0..<count).map { check.page(at: $0)?.string ?? "" })
+    }
+
+    /// Stempeltext („Nr. 000123 · 19.09.2026“) aus dem Text einer Seite.
+    static func stampText(in pageText: String) -> String? {
+        guard let range = pageText.range(of: #"Nr\. \d+ · \d{2}\.\d{2}\.\d{4}"#, options: .regularExpression) else { return nil }
+        return String(pageText[range])
     }
 
     /// Metadaten speichern: bevorzugt **angehängt** (inkrementelles Update, Original bleibt bitgenau),

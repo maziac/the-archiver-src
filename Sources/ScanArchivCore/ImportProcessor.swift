@@ -67,11 +67,27 @@ public enum ImportProcessor {
 
     /// Prüft eine erzeugte Fassung: Seitenzahl, Text auf allen Seiten, die Text haben sollen,
     /// Stempel (Nummer) und Metadaten müssen lesbar sein.
-    static func validate(_ data: Data, number: Int, pageCount: Int, textPages: Set<Int>) -> Bool {
+    /// - Parameter expectedTexts: nach dem Umsortieren der erwartete Text je Seite – jede Seite muss
+    ///   typische Wörter davon enthalten, damit eine falsch sortierte Fassung nie gewinnt.
+    static func validate(_ data: Data, number: Int, pageCount: Int, textPages: Set<Int>,
+                         expectedTexts: [String]? = nil) -> Bool {
         guard let pdf = PDFDocument(data: data), pdf.pageCount == pageCount,
               PDFMetadata.read(pdf)?.number == number,
               !pdf.findString("Nr. \(Archive.formatNumber(number))", withOptions: []).isEmpty else { return false }
-        return textPages.allSatisfy { DocumentIssue.hasText(pdf.page(at: $0)?.string ?? "") }
+        guard textPages.allSatisfy({ DocumentIssue.hasText(pdf.page(at: $0)?.string ?? "") }) else { return false }
+        guard let expectedTexts else { return true }
+        return pagesMatch(pdf, expectedTexts: expectedTexts)
+    }
+
+    /// Jede Seite enthält typische Wörter ihres erwarteten Textes (Stichprobe der längeren Wörter).
+    static func pagesMatch(_ pdf: PDFDocument, expectedTexts: [String]) -> Bool {
+        expectedTexts.enumerated().allSatisfy { index, expected in
+            let words = Set(expected.split(whereSeparator: { !$0.isLetter }).filter { $0.count >= 5 }.map { $0.lowercased() })
+                .sorted().prefix(5)
+            guard !words.isEmpty else { return true }
+            let actual = (pdf.page(at: index)?.string ?? "").lowercased()
+            return words.filter { actual.contains($0) }.count * 2 >= words.count
+        }
     }
 
     public static func sha256(of data: Data) -> String {
@@ -93,6 +109,8 @@ public enum ImportProcessor {
 
         var issues: [DocumentIssue] = []
         var pageTexts: [String] = []
+        /// laut Seitenzahlen umsortiert: Originalindizes in neuer Reihenfolge
+        var pageOrder: [Int]?
         var textSources: [DocumentMetadata.TextSource] = []
         let source: DocumentMetadata.Source
         let preset: SizePreset
@@ -142,14 +160,33 @@ public enum ImportProcessor {
                     composed.append(PDFPageInput(vectorPage: cgPage))
                 }
             }
+            // Reihenfolge laut gedruckter Seitenzahlen; eindeutig → vor dem Stempeln umsortieren
+            let numbering = PageNumbering.analyze(pageTexts: pageTexts)
+            if case let .reorder(order) = numbering {
+                pageOrder = order
+                pageTexts = order.map { pageTexts[$0] }
+                textSources = order.map { textSources[$0] }
+                edits = order.map { edits[$0] }
+                composed = order.map { composed[$0] }
+                emptyPages = emptyPages.compactMap { old in order.firstIndex(of: old - 1).map { $0 + 1 } }.sorted()
+            }
             if !emptyPages.isEmpty { issues.append(.noText(pages: emptyPages)) }
+            switch numbering {
+            case let .reorder(order): issues.append(.pageOrderCorrected(original: PageNumbering.originalSequence(order)))
+            case let .uncertain(numbers): issues.append(.pageOrderUncertain(numbers: numbers))
+            case .none, .inOrder: break
+            }
             let hasImagePages = textSources.contains { $0 != .embedded }
-            let overlays = edits.filter { !$0.lines.isEmpty }.map { PDFAppender.Overlay(pageIndex: $0.index, lines: $0.lines) }
+            let order = pageOrder
+            // Positionen in der (ggf. neuen) Reihenfolge
+            let overlays = edits.enumerated().filter { !$0.element.lines.isEmpty }
+                .map { PDFAppender.Overlay(pageIndex: $0.offset, lines: $0.element.lines) }
             makeCandidates = { number, date, title, summary, meta in
                 var candidates: [Candidate] = []
                 // 1. Original unverändert, Zusätze angehängt (inkrementelles Update)
                 if let appended = try? PDFAppender.stamp(original: fileData, stampText: PDFBuilder.stampText(number: number, date: date),
-                                                         overlays: overlays, meta: meta(.appended, false), title: title, summary: summary) {
+                                                         overlays: overlays, meta: meta(.appended, false), title: title, summary: summary,
+                                                         order: order) {
                     candidates.append(Candidate(storage: .appended, data: appended))
                 }
                 // 2. von PDFKit neu geschrieben (manchmal kleiner, z. B. bei ungünstig aufgebauten Originalen)
@@ -203,7 +240,7 @@ public enum ImportProcessor {
         let firstText = pageTexts.prefix(2).joined(separator: "\n\n")
         var suggestion: DocumentSuggestion?
         if !options.useSummarizer {
-            issues.append(.noSuggestion("deaktiviert"))
+            issues.append(.noSuggestion(DocumentIssue.suggestionDisabled))
         } else if !DocumentIssue.hasText(firstText) {
             issues.append(.noSuggestion("kein Text auf den ersten Seiten"))
         } else {
@@ -238,11 +275,13 @@ public enum ImportProcessor {
             titleSource: title.isEmpty ? .none : .ai, titleUpdated: title.isEmpty ? nil : Date(),
             archivedAt: Date(), source: source, originalFileName: name, originalSize: fileData.count, originalSHA256: sha,
             pages: textSources, ocr: usesOCR ? DocumentMetadata.OCRInfo() : nil, issues: issues)
+        meta.pageOrder = pageOrder
         let finalMeta = meta
 
         progress("Speichern")
         let expectedTextPages = Set(textSources.enumerated().filter { $0.element != .none }.map(\.offset))
         let pageCount = textSources.count
+        let expectedTexts = pageOrder == nil ? nil : pageTexts
         let saved = try await Task.detached { () throws -> (number: Int, url: URL, meta: DocumentMetadata) in
             var stored = finalMeta
             let result = try archive.save(date: date, title: title) { number in
@@ -259,7 +298,8 @@ public enum ImportProcessor {
                 // Die kleinste Fassung gewinnt – aber nur, wenn Text, Stempel und Metadaten lesbar sind
                 let candidates = try makeCandidates(number, date, title, summary, metaFor)
                 let valid = candidates.filter {
-                    validate($0.data, number: number, pageCount: pageCount, textPages: expectedTextPages)
+                    validate($0.data, number: number, pageCount: pageCount, textPages: expectedTextPages,
+                             expectedTexts: expectedTexts)
                 }
                 guard let best = valid.min(by: { $0.data.count < $1.data.count }) else { throw ImportError.unreadable(name) }
                 stored = metaFor(best.storage, best.compressed)

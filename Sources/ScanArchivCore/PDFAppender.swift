@@ -23,12 +23,15 @@ public enum PDFAppender {
     static let metadataKey = "ScanArchiv"
 
     /// Stempel auf Seite 1, OCR-Ebenen, Metadaten-Anmerkung und Dokumentinfos anhängen.
+    /// - Parameter order: neue Seitenreihenfolge (Indizes der Originalseiten); `Overlay.pageIndex` und der
+    ///   Stempel beziehen sich dann auf die **neue** Reihenfolge.
     public static func stamp(original: Data, stampText: String, overlays: [Overlay],
-                             meta: DocumentMetadata, title: String, summary: String) throws -> Data {
+                             meta: DocumentMetadata, title: String, summary: String, order: [Int]? = nil) throws -> Data {
         let doc = try PDFRawDocument(data: original)
         let update = PDFIncrementalUpdate(doc)
-        let pages = try doc.pages()
+        var pages = try doc.pages()
         guard !pages.isEmpty else { throw PDFRawError.malformed("keine Seiten") }
+        if let order { pages = try reorder(pages, order: order, in: doc, update: update) }
 
         let stampFont = update.add(.dict(PDFDict([
             ("Type", .name("Font")), ("Subtype", .name("Type1")),
@@ -38,34 +41,118 @@ public enum PDFAppender {
         let textFont: (ref: PDFValue, gids: [UInt32: Int], codepoints: [UInt32])? =
             usable.isEmpty ? nil : try addGlyphlessFont(for: usable.flatMap { $0.lines.map(\.text) }, to: update)
 
-        for (index, page) in pages.enumerated() {
+        for (index, original) in pages.enumerated() {
+            var page = original
             let overlay = usable.first { $0.pageIndex == index }
             guard index == 0 || overlay != nil else { continue }
             let (toPage, size) = geometry(of: page)
-            // „Q“ schließt das vorangestellte „q“: Stempel/Textebene starten mit dem Grafikzustand der Seite
-            var ops = "Q\nq\n" + matrix(toPage) + " cm\n"
+            var ops = ""
             if let overlay, let textFont {
                 ops += invisibleText(overlay.lines, pageSize: size, gids: textFont.gids, codepoints: textFont.codepoints)
             }
             if index == 0 { ops += stampOps(stampText, pageSize: size) }
-            ops += "Q\n"
 
             var fonts: [(String, PDFValue)] = []
             if index == 0 { fonts.append((stampFontName, stampFont)) }
             if overlay != nil, let textFont { fonts.append((textFontName, textFont.ref)) }
-
-            let open = update.addStream(Array("q\n".utf8), compress: false)
-            let content = update.addStream(Array(ops.utf8))
-            var dict = page.dict
-            dict["Contents"] = .array([open] + (try contentsList(of: page.dict, in: doc)) + [content])
-            dict["Resources"] = .dict(try resources(of: page, in: doc, addingFonts: fonts))
+            try appendContent(ops, transform: toPage, fonts: fonts, to: &page, in: doc, update: update)
             if index == 0 {
-                dict["Annots"] = .array(try setMetadataAnnotation(meta, pageDict: page.dict, pageRef: page.ref, in: doc, update: update))
+                page.dict["Annots"] = .array(try setMetadataAnnotation(meta, pageDict: page.dict, pageRef: page.ref, in: doc, update: update))
             }
-            update.set(page.ref, .dict(dict))
+            update.set(page.ref, .dict(page.dict))
         }
         try setInfo(meta, title: title, summary: summary, in: doc, update: update)
         return update.write()
+    }
+
+    /// Hängt Zeichenbefehle (in Koordinaten der angezeigten Seite) als eigenen Inhaltsstrom an.
+    /// Ein vorangestelltes „q“ und das „Q“ am Anfang sorgen dafür, dass die Befehle mit dem
+    /// ursprünglichen Grafikzustand der Seite starten. Setzt `Contents`/`Resources` in `page.dict`.
+    static func appendContent(_ ops: String, transform: CGAffineTransform, fonts: [(String, PDFValue)],
+                              to page: inout PDFRawDocument.PageInfo, in doc: PDFRawDocument,
+                              update: PDFIncrementalUpdate) throws {
+        let open = update.addStream(Array("q\n".utf8), compress: false)
+        let content = update.addStream(Array(("Q\nq\n" + matrix(transform) + " cm\n" + ops + "Q\n").utf8))
+        page.dict["Contents"] = .array([open] + (try contentsList(of: page.dict, in: doc)) + [content])
+        if !fonts.isEmpty { page.dict["Resources"] = .dict(try resources(of: page, in: doc, addingFonts: fonts)) }
+    }
+
+    /// Seiten eines archivierten Dokuments umsortieren und drehen (inkrementell).
+    /// Wird eine andere Seite zur ersten oder die erste gedreht, wandert der Stempel mit:
+    /// Die alte Stempelfläche wird weiß überdeckt, die neue erste Seite bekommt denselben Stempeltext,
+    /// und die Metadaten-Anmerkung zieht auf die neue erste Seite um.
+    /// - Parameters:
+    ///   - order: Indizes der bisherigen Seiten in neuer Reihenfolge
+    ///   - rotations: zusätzliche Drehung im Uhrzeigersinn je neuer Position (Vielfache von 90)
+    ///   - stampText: Text des vorhandenen Stempels
+    public static func rearrange(_ data: Data, order: [Int], rotations: [Int], stampText: String,
+                                 meta: DocumentMetadata, title: String, summary: String) throws -> Data {
+        let doc = try PDFRawDocument(data: data)
+        let update = PDFIncrementalUpdate(doc)
+        let original = try doc.pages()
+        guard !original.isEmpty else { throw PDFRawError.malformed("keine Seiten") }
+        guard rotations.count == order.count, rotations.allSatisfy({ $0 % 90 == 0 }) else {
+            throw PDFRawError.malformed("ungültige Drehung")
+        }
+        var pages = try reorder(original, order: order, in: doc, update: update)
+        for i in pages.indices where rotations[i] % 360 != 0 {
+            let current = (pages[i].dict["Rotate"] ?? pages[i].inherited["Rotate"])?.int ?? 0
+            pages[i].dict["Rotate"] = .int(((current + rotations[i]) % 360 + 360) % 360)
+        }
+
+        if order[0] != 0 || rotations[0] % 360 != 0 {
+            // alte erste Seite: Stempel überdecken (in ihrer bisherigen Lage) und Metadaten-Anmerkung entfernen
+            let oldPosition = order.firstIndex(of: 0)!
+            let (oldTransform, oldSize) = geometry(of: original[0])
+            try appendContent(coverStampOps(stampText, pageSize: oldSize), transform: oldTransform, fonts: [],
+                              to: &pages[oldPosition], in: doc, update: update)
+            let remaining = try annotsList(of: pages[oldPosition].dict, in: doc).filter { item in
+                guard case let .ref(num, _) = item, case let .dict(annot) = try doc.object(num) else { return true }
+                return annot[metadataKey] == nil
+            }
+            pages[oldPosition].dict["Annots"] = .array(remaining)
+            // neue erste Seite: Stempel in ihrer (neuen) Lage
+            let stampFont = update.add(.dict(PDFDict([
+                ("Type", .name("Font")), ("Subtype", .name("Type1")),
+                ("BaseFont", .name("Helvetica-Bold")), ("Encoding", .name("WinAnsiEncoding")),
+            ])))
+            let (toPage, size) = geometry(of: pages[0])
+            try appendContent(stampOps(stampText, pageSize: size), transform: toPage, fonts: [(stampFontName, stampFont)],
+                              to: &pages[0], in: doc, update: update)
+        }
+        pages[0].dict["Annots"] = .array(try setMetadataAnnotation(meta, pageDict: pages[0].dict, pageRef: pages[0].ref,
+                                                                   in: doc, update: update))
+        for page in pages { update.set(page.ref, .dict(page.dict)) }
+        try setInfo(meta, title: title, summary: summary, in: doc, update: update)
+        return update.write()
+    }
+
+    /// Neuer, flacher Seitenbaum in der gewünschten Reihenfolge. Geerbte Attribute wandern in die Seiten,
+    /// damit Größe, Drehung und Ressourcen erhalten bleiben. Liefert die Seiten in neuer Reihenfolge.
+    static func reorder(_ pages: [PDFRawDocument.PageInfo], order: [Int], in doc: PDFRawDocument,
+                        update: PDFIncrementalUpdate) throws -> [PDFRawDocument.PageInfo] {
+        guard order.sorted() == Array(pages.indices) else { throw PDFRawError.malformed("ungültige Seitenreihenfolge") }
+        guard case let .ref(rootNum, _)? = doc.trailer["Root"], case var .dict(catalog) = try doc.object(rootNum) else {
+            throw PDFRawError.malformed("Katalog")
+        }
+        let treeNum = update.allocate()
+        let reordered = order.map { index -> PDFRawDocument.PageInfo in
+            var page = pages[index]
+            for key in ["Resources", "MediaBox", "CropBox", "Rotate"] where page.dict[key] == nil {
+                if let value = page.inherited[key] { page.dict[key] = value }
+            }
+            page.dict["Parent"] = .ref(treeNum, 0)
+            update.set(page.ref, .dict(page.dict))
+            return page
+        }
+        update.set(treeNum, .dict(PDFDict([
+            ("Type", .name("Pages")),
+            ("Kids", .array(reordered.map { .ref($0.ref, doc.generation(of: $0.ref)) })),
+            ("Count", .int(reordered.count)),
+        ])))
+        catalog["Pages"] = .ref(treeNum, 0)
+        update.set(rootNum, .dict(catalog))
+        return reordered
     }
 
     /// Nur Metadaten (Anmerkung + Dokumentinfos) aktualisieren – z. B. nach „Bearbeiten“.
@@ -128,20 +215,24 @@ public enum PDFAppender {
     // MARK: Stempel (Standardschrift, keine Einbettung)
 
     static func stampOps(_ text: String, pageSize: CGSize) -> String {
-        let font = CTFontCreateWithName("Helvetica-Bold" as CFString, 9, nil)
-        let line = CTLineCreateWithAttributedString(NSAttributedString(string: text, attributes: [.init(kCTFontAttributeName as String): font]))
-        var ascent: CGFloat = 0, descent: CGFloat = 0
-        let width = CTLineGetTypographicBounds(line, &ascent, &descent, nil)
-        let margin: CGFloat = 14, padding: CGFloat = 3
-        let x = pageSize.width - margin - width, y = pageSize.height - margin - ascent
-        let box = [x - padding, y - descent - padding, width + 2 * padding, ascent + descent + 2 * padding]
-            .map { PDFValue.format(Double($0)) }.joined(separator: " ")
+        let (rect, origin) = PDFBuilder.stampGeometry(text, pageSize: pageSize)
+        let box = rectOps(rect)
         let encoded = PDFValue.string(text.data(using: .windowsCP1252, allowLossyConversion: true) ?? Data(text.utf8)).serialized()
         return """
             q 1 1 1 rg \(box) re f 0.85 0.05 0.05 RG 0.75 w \(box) re S
-            BT 0.85 0.05 0.05 rg /\(stampFontName) 9 Tf 1 0 0 1 \(PDFValue.format(Double(x))) \(PDFValue.format(Double(y))) Tm \(String(decoding: encoded, as: UTF8.self)) Tj ET Q
+            BT 0.85 0.05 0.05 rg /\(stampFontName) 9 Tf 1 0 0 1 \(PDFValue.format(Double(origin.x))) \(PDFValue.format(Double(origin.y))) Tm \(String(decoding: encoded, as: UTF8.self)) Tj ET Q
 
             """
+    }
+
+    /// Weiße Fläche über einem früheren Stempel (etwas größer, damit auch der Rahmen verschwindet).
+    static func coverStampOps(_ text: String, pageSize: CGSize) -> String {
+        let rect = PDFBuilder.stampGeometry(text, pageSize: pageSize).box.insetBy(dx: -1, dy: -1)
+        return "q 1 1 1 rg \(rectOps(rect)) re f Q\n"
+    }
+
+    static func rectOps(_ r: CGRect) -> String {
+        [r.minX, r.minY, r.width, r.height].map { PDFValue.format(Double($0)) }.joined(separator: " ")
     }
 
     // MARK: OCR-Ebene (Schrift ohne Zeichenformen, nur benutzte Zeichen)

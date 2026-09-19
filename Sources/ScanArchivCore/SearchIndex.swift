@@ -98,10 +98,11 @@ public final class SearchIndex: @unchecked Sendable {
 
     /// Nach Bearbeiten/Umbenennen: Pfad, Datum, Titel, Beschreibung und Metadaten aktualisieren.
     public func update(oldPath: String, newURL: URL, date: Date, title: String, summary: String,
-                       meta: DocumentMetadata? = nil) throws {
+                       meta: DocumentMetadata? = nil, text: String? = nil) throws {
         lock.lock(); defer { lock.unlock() }
         try run("UPDATE docs SET path = ?, date = ?, title = ?, summary = ? WHERE path = ?",
                 [newURL.path, date.timeIntervalSince1970, title, summary, oldPath])
+        if let text { try run("UPDATE docs SET text = ? WHERE path = ?", [text, newURL.path]) }
         if let meta {
             try run("UPDATE docs SET meta = ?, issues = ? WHERE path = ?",
                     [(try? meta.encoded()) ?? "", DocumentIssue.encode(meta.issues), newURL.path])

@@ -1,3 +1,4 @@
+import ScanArchivCore
 import SwiftUI
 
 /// Miniaturen in der fertigen Reihenfolge; Seiten lassen sich drehen, verschieben oder entfernen.
@@ -26,6 +27,10 @@ struct PagePreviewView: View {
                 .padding(.horizontal, 16)
                 .padding(.vertical, 10)
             Divider()
+            if let hint = session.orderHint {
+                OrderHintBar(session: session, hint: hint)
+                Divider()
+            }
             ScrollView {
                 LazyVGrid(columns: [GridItem(.adaptive(minimum: 150), spacing: 16)], spacing: 16) {
                     ForEach(Array(session.pages.enumerated()), id: \.element.id) { index, page in
@@ -35,6 +40,34 @@ struct PagePreviewView: View {
                 .padding(16)
             }
         }
+    }
+}
+
+/// Gelber Hinweis, wenn die gedruckten Seitenzahlen nicht zur Reihenfolge passen.
+private struct OrderHintBar: View {
+    let session: ScanSession
+    let hint: ScanSession.OrderHint
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Image(systemName: DocumentIssue.Severity.warning.symbol)
+                .foregroundStyle(DocumentIssue.Severity.warning.color)
+            switch hint {
+            case let .reorder(_, sequence):
+                Text("Laut Seitenzahlen liegen die Seiten in der Reihenfolge \(sequence.map(String.init).joined(separator: ", ")) vor.")
+                Spacer()
+                Button("Ignorieren") { session.dismissOrderHint() }
+                Button("Umsortieren") { withAnimation { session.applyOrderHint() } }
+                    .buttonStyle(.borderedProminent)
+            case let .uncertain(numbers):
+                Text("Die Seitenzahlen passen nicht zur Reihenfolge (\(numbers.map { $0.map(String.init) ?? "?" }.joined(separator: ", "))) – bitte prüfen.")
+                Spacer()
+                Button("Ausblenden") { session.dismissOrderHint() }
+            }
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 8)
+        .background(Color.orange.opacity(0.12))
     }
 }
 

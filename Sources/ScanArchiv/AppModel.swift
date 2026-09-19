@@ -164,11 +164,23 @@ final class AppModel {
                     switch issue {
                     case .noSuggestion: return !title.isEmpty
                     case .noDate: return dateSource != nil && dateSource != .today
-                    case .noText: return false
+                    case .noText, .pageOrderCorrected, .pageOrderUncertain: return false
                     }
                 }
             }
             try index.update(oldPath: path, newURL: result.url, date: date, title: title, summary: summary, meta: result.meta)
+        }.value
+        revision += 1
+    }
+
+    /// „Seiten bearbeiten“: umsortieren/drehen, danach Volltext und Metadaten im Index erneuern.
+    func rearrangePages(_ record: DocumentRecord, order: [Int], rotations: [Int]) async throws {
+        guard let archive, let index else { return }
+        try await Task.detached {
+            let result = try archive.rearrange(url: record.url, order: order, rotations: rotations,
+                                               title: record.title, summary: record.summary)
+            try index.update(oldPath: record.path, newURL: record.url, date: record.date, title: record.title,
+                             summary: record.summary, meta: result.meta, text: result.pageTexts.joined(separator: "\n\n"))
         }.value
         revision += 1
     }

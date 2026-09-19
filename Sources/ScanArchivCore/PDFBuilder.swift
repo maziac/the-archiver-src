@@ -146,6 +146,20 @@ public enum PDFBuilder {
     }
 
     /// Roter Nummernstempel (echter Text, damit die Nummer im PDF durchsuchbar ist).
+    /// Lage des Stempels auf der angezeigten Seite: Kasten und Textursprung (oben rechts, 14 pt Rand).
+    /// Gemeinsam für alle Erzeugungswege, damit sich ein Stempel später exakt überdecken lässt.
+    public static func stampGeometry(_ text: String, pageSize: CGSize) -> (box: CGRect, origin: CGPoint) {
+        let font = CTFontCreateWithName("Helvetica-Bold" as CFString, 9, nil)
+        let line = CTLineCreateWithAttributedString(NSAttributedString(string: text, attributes: [.init(kCTFontAttributeName as String): font]))
+        var ascent: CGFloat = 0, descent: CGFloat = 0
+        let width = CTLineGetTypographicBounds(line, &ascent, &descent, nil)
+        let margin: CGFloat = 14, padding: CGFloat = 3
+        let origin = CGPoint(x: pageSize.width - margin - width, y: pageSize.height - margin - ascent)
+        let box = CGRect(x: origin.x - padding, y: origin.y - descent - padding,
+                         width: width + 2 * padding, height: ascent + descent + 2 * padding)
+        return (box, origin)
+    }
+
     static func drawStamp(_ text: String, in ctx: CGContext, pageSize: CGSize) {
         let font = CTFontCreateWithName("Helvetica-Bold" as CFString, 9, nil)
         // Rot, damit er sich vom schwarz-weißen Scan abhebt
@@ -155,15 +169,10 @@ public enum PDFBuilder {
             .init(kCTForegroundColorAttributeName as String): color,
         ])
         let line = CTLineCreateWithAttributedString(attributed)
-        var ascent: CGFloat = 0, descent: CGFloat = 0
-        let width = CTLineGetTypographicBounds(line, &ascent, &descent, nil)
-        let margin: CGFloat = 14, padding: CGFloat = 3
-        let origin = CGPoint(x: pageSize.width - margin - width, y: pageSize.height - margin - ascent)
+        let (box, origin) = stampGeometry(text, pageSize: pageSize)
 
         ctx.saveGState()
         ctx.setFillColor(CGColor(gray: 1, alpha: 0.85))
-        let box = CGRect(x: origin.x - padding, y: origin.y - descent - padding,
-                         width: width + 2 * padding, height: ascent + descent + 2 * padding)
         ctx.fill(box)
         ctx.setStrokeColor(color)
         ctx.setLineWidth(0.75)
@@ -257,6 +266,9 @@ public enum ImageTools {
                                   bitmapInfo: isGray ? CGImageAlphaInfo.none.rawValue : CGImageAlphaInfo.noneSkipLast.rawValue) else {
             return image
         }
+        // weißer Grund, falls das Bild transparente Bereiche hat (z. B. Miniaturen von PDF-Seiten)
+        ctx.setFillColor(CGColor(gray: 1, alpha: 1))
+        ctx.fill(CGRect(x: 0, y: 0, width: width, height: height))
         // exakte Matrizen (kein rotate(by:) – Rundungsfehler würden das Bild neu abtasten und weichzeichnen)
         let w = CGFloat(width), h = CGFloat(height)
         switch degrees {

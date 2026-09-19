@@ -72,16 +72,17 @@ struct ScanView: View {
         switch session.phase {
         case .ready:
             Instruction(
-                step: "Schritt 1 von 2",
+                step: "Scannen",
                 icon: "doc.on.doc",
-                title: "Vorderseiten scannen",
-                text: "Lege den Stapel mit den Vorderseiten nach oben in den Einzug, die erste Seite obenauf.\nOder scanne Seite für Seite – etwa für gebundene, empfindliche oder sehr unterschiedliche Blätter.\nVorhandene PDFs oder Bilder kannst du einfach hierher oder in den Tab „Eingang“ ziehen – sie werden automatisch verarbeitet.")
+                title: "Dokument scannen",
+                text: "Stapel: Blätter mit den Vorderseiten nach oben in den Einzug legen, die erste Seite obenauf. Beidseitige Blätter werden danach gewendet und die Rückseiten gescannt.\nSeite für Seite: für gebundene, empfindliche oder sehr unterschiedliche Blätter.\nVorhandene PDFs oder Bilder einfach hierher oder in den Tab „Eingang“ ziehen.")
             {
                 Button("Seite für Seite …") { session.scanSinglePage() }
                     .help("Jede Seite einzeln scannen; nach jeder Seite wird gefragt, ob noch eine kommt")
                     .disabled(!scanner.isReady || scanner.sources.isEmpty)
-                Button("Vorderseiten scannen") { session.scanFronts() }
+                Button("Stapel scannen") { session.scanFronts() }
                     .keyboardShortcut(.defaultAction)
+                    .help("Alle Blätter im Einzug scannen; beidseitige Blätter danach wenden")
                     .disabled(!scanner.isReady || !scanner.sources.contains(.feeder))
             } footer: {
                 sourcePicker

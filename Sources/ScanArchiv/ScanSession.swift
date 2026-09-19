@@ -1,6 +1,7 @@
 import AppKit
 import Foundation
 import Observation
+import os
 import ScanArchivCore
 
 struct ScannedPage: Identifiable {
@@ -82,6 +83,18 @@ final class ScanSession {
     }
     /// Fehler beim letzten Einzelscan (die bisherigen Seiten bleiben erhalten)
     private(set) var singleError: String?
+
+    /// Hinweis, wenn die gedruckten Seitenzahlen nicht zur Reihenfolge passen.
+    enum OrderHint: Equatable {
+        /// eindeutig: vorgeschlagene Reihenfolge (Seiten-IDs); `sequence` = Seitenzahlen in aktueller Lage
+        case reorder([UUID], sequence: [Int])
+        /// passt nicht, aber nicht eindeutig (gefundene Nummern, nil = keine)
+        case uncertain([Int?])
+    }
+    private(set) var orderHint: OrderHint?
+    private static let log = Logger(subsystem: "de.local.scanarchiv", category: "scan")
+    /// Reihenfolge, für die der Hinweis mit „Ignorieren“ ausgeblendet wurde
+    @ObservationIgnored private var orderHintDismissedFor: [UUID]?
 
     // Metadaten-Vorschlag (bearbeitbar in der Vorschau)
     var title = "" { didSet { if !applying { titleEdited = true } } }
@@ -226,6 +239,8 @@ final class ScanSession {
         ocrCache = [:]
         suggestedText = nil
         singleError = nil
+        orderHint = nil
+        orderHintDismissedFor = nil
         withoutEditTracking {
             title = ""
             summary = ""
@@ -261,6 +276,49 @@ final class ScanSession {
         startAnalysis()
     }
 
+    /// Übernimmt die Reihenfolge laut Seitenzahlen.
+    func applyOrderHint() {
+        guard case let .reorder(ids, _) = orderHint else { return }
+        let byID = Dictionary(uniqueKeysWithValues: pages.map { ($0.id, $0) })
+        let reordered = ids.compactMap { byID[$0] }
+        guard reordered.count == pages.count else { orderHint = nil; return }
+        pages = reordered
+        orderHint = nil
+        startAnalysis()
+    }
+
+    /// Blendet den Hinweis aus, bis sich die Seiten ändern.
+    func dismissOrderHint() {
+        orderHintDismissedFor = pages.map(\.id)
+        orderHint = nil
+    }
+
+    /// Prüft die Reihenfolge anhand der Seitenzahlen, sobald alle Seiten erkannt sind.
+    private func checkPageOrder() {
+        let ids = pages.map(\.id)
+        guard orderHintDismissedFor != ids else { orderHint = nil; return }
+        var texts: [String] = []
+        for page in pages {
+            guard let cached = ocrCache[page.id], cached.rotation == page.rotation else {
+                Self.log.notice("Reihenfolge: Seite ohne Texterkennung – keine Prüfung")
+                return
+            }
+            // von oben nach unten, damit Kopf- und Fußzeile sicher am Anfang bzw. Ende stehen
+            let sorted = cached.lines.sorted { $0.box.midY > $1.box.midY }
+            texts.append(sorted.map(\.text).joined(separator: "\n"))
+        }
+        let result = PageNumbering.analyze(pageTexts: texts)
+        Self.log.notice("Reihenfolge: \(String(describing: result), privacy: .public) – Seitenzahlen \(texts.map { PageNumbering.pageNumber(in: $0).map { String($0.number) } ?? "–" }.joined(separator: ","), privacy: .public)")
+        switch result {
+        case let .reorder(order):
+            orderHint = .reorder(order.map { ids[$0] }, sequence: PageNumbering.originalSequence(order))
+        case let .uncertain(numbers):
+            orderHint = .uncertain(numbers)
+        case .none, .inOrder:
+            orderHint = nil
+        }
+    }
+
     /// Verwirft eigene Eingaben und fragt Apple Intelligence erneut.
     func resuggest() {
         suggestedText = nil
@@ -285,6 +343,7 @@ final class ScanSession {
         backgroundOCRTask?.cancel()
         let ids = pages.map(\.id)
         let first = Array(ids.prefix(Self.suggestionPageCount))
+        if case let .reorder(proposed, _) = orderHint, Set(proposed) != Set(ids) { orderHint = nil }
 
         analysisTask = Task {
             if suggestedText == nil || suggestionState != .done { suggestionState = .recognizing }
@@ -299,6 +358,7 @@ final class ScanSession {
                     if Task.isCancelled { return }
                     _ = await prepare(id)
                 }
+                if !Task.isCancelled { checkPageOrder() }
             }
             let text = texts.joined(separator: "\n\n")
             // gleicher Text wie beim letzten Vorschlag (z. B. nur hinten Seiten dazu) → nichts zu tun
@@ -392,7 +452,7 @@ final class ScanSession {
         let date = documentDate
         let title = title.trimmingCharacters(in: .whitespacesAndNewlines)
         let summary = summary.trimmingCharacters(in: .whitespacesAndNewlines)
-        let snapshot = pages
+        let ids = pages.map(\.id)
         let dpi = Double(dpi)
         let preset = SettingsKey.preset(SettingsKey.scanPreset)
         let colorMode = scanColorMode
@@ -416,19 +476,34 @@ final class ScanSession {
 
         Task {
             do {
-                // Texterkennung für alle Seiten (meist schon im Hintergrund erledigt), dann komprimieren
+                // Ausrichtung + Texterkennung für alle Seiten (meist schon im Hintergrund erledigt)
+                for (i, id) in ids.enumerated() {
+                    guard let page = pages.first(where: { $0.id == id }) else { continue }
+                    if ocrCache[id]?.rotation != page.rotation || (autoOrient && !page.orientationChecked && !page.manuallyRotated) {
+                        phase = .processing("Texterkennung Seite \(i + 1) von \(ids.count) …")
+                    }
+                    guard await prepare(id) != nil else {
+                        throw ScannerError.scanFailed("Texterkennung für Seite \(i + 1) fehlgeschlagen.")
+                    }
+                }
+                // Wurde vor Ende der Texterkennung gespeichert, hat der Benutzer einen Reihenfolge-Hinweis
+                // noch nicht gesehen → erst zeigen; danach speichert „Speichern“ so, wie er es entscheidet.
+                if orderHint == nil {
+                    checkPageOrder()
+                    if orderHint != nil {
+                        phase = .preview
+                        return
+                    }
+                }
+                let snapshot = ids.compactMap { id in pages.first { $0.id == id } }
+
+                // komprimieren
                 var pdfPages: [PDFPageInput] = []
                 var textSources: [DocumentMetadata.TextSource] = []
                 var emptyPages: [Int] = []
                 var texts: [String] = []
                 for (i, page) in snapshot.enumerated() {
-                    let lines: [OCRLine]
-                    if let cached = ocrCache[page.id], cached.rotation == page.rotation {
-                        lines = cached.lines
-                    } else {
-                        phase = .processing("Texterkennung Seite \(i + 1) von \(snapshot.count) …")
-                        lines = try await Self.recognize(url: page.url, rotation: page.rotation)
-                    }
+                    let lines = ocrCache[page.id]?.lines ?? []
                     let text = lines.map(\.text).joined(separator: "\n")
                     let hasText = DocumentIssue.hasText(text)
                     if !hasText { emptyPages.append(i + 1) }

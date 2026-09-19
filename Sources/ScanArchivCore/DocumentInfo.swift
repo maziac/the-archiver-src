@@ -60,6 +60,9 @@ public enum DocumentInfo {
         add("Kompression", compressionText(meta))
         add("Dateigröße", sizeText)
         add("Text je Seite", textText(meta, pageCount: pageCount))
+        if let order = meta.pageOrder {
+            add("Seitenreihenfolge", "laut Seitenzahlen korrigiert (im Original: \(PageNumbering.originalSequence(order).map(String.init).joined(separator: ", ")))")
+        }
         if let ocr = meta.ocr {
             add("OCR", "\(ocr.engine), \(ocr.languages.joined(separator: ", ")), \(dateTime.string(from: ocr.date))")
         }

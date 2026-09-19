@@ -217,7 +217,7 @@ private struct InboxRow: View {
             if result.issues.isEmpty {
                 Image(systemName: "checkmark.circle.fill").foregroundStyle(.green)
             } else {
-                Image(systemName: "exclamationmark.circle.fill").foregroundStyle(.red)
+                Image(systemName: result.issues.symbol).foregroundStyle(result.issues.color)
             }
         case .failed:
             Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.red)
@@ -239,7 +239,7 @@ private struct InboxRow: View {
                 Text(head).font(.caption).foregroundStyle(.secondary).lineLimit(1)
             } else {
                 Text("\(head) – archiviert, aber: \(result.issues.map(\.message).joined(separator: "; "))")
-                    .font(.caption).foregroundStyle(.red).lineLimit(2)
+                    .font(.caption).foregroundStyle(result.issues.color).lineLimit(2)
             }
         case let .failed(message):
             Text("\(message) → Ordner „Fehler“").font(.caption).foregroundStyle(.red).lineLimit(2)

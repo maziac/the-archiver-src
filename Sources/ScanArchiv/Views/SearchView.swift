@@ -8,6 +8,7 @@ struct SearchView: View {
     @State private var selection = Set<DocumentRecord.ID>()
     @State private var sortOrder = [KeyPathComparator(\DocumentRecord.number, order: .reverse)]
     @State private var editing: DocumentRecord?
+    @State private var editingPages: DocumentRecord?
     @State private var pendingDelete: [DocumentRecord] = []
     @State private var preview = PDFPreviewModel()
     @State private var onlyIssues = false
@@ -63,7 +64,9 @@ struct SearchView: View {
             HSplitView {
                 table
                     .frame(minWidth: 440, idealWidth: 620)
-                PDFPreviewPane(preview: preview)
+                PDFPreviewPane(preview: preview) {
+                    if let url = preview.url { editingPages = results.first { $0.url == url } }
+                }
                     .frame(minWidth: 320, idealWidth: 480, maxHeight: .infinity)
             }
         }
@@ -105,6 +108,11 @@ struct SearchView: View {
         .sheet(item: $editing) { record in
             EditDocumentSheet(record: record)
         }
+        .sheet(item: $editingPages) { record in
+            PageEditorSheet(record: record) {
+                if preview.url == record.url { preview.reload() }
+            }
+        }
     }
 
     private var table: some View {
@@ -112,10 +120,10 @@ struct SearchView: View {
             TableColumn("Nr.", value: \.number) { record in
                 HStack(spacing: 3) {
                     if record.hasIssues {
-                        Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.red).font(.caption)
+                        Image(systemName: record.issues.symbol).foregroundStyle(record.issues.color).font(.caption)
                     }
                     Text(Archive.formatNumber(record.number)).monospacedDigit()
-                        .foregroundStyle(record.hasIssues ? Color.red : Color.primary)
+                        .foregroundStyle(record.issues.color)
                 }
             }
             .width(78)
@@ -125,12 +133,12 @@ struct SearchView: View {
                 VStack(alignment: .leading, spacing: 2) {
                     Text(record.displayTitle)
                         .fontWeight(.semibold)
-                        .foregroundStyle(record.hasIssues ? Color.red : Color.primary)
+                        .foregroundStyle(record.issues.color)
                         .lineLimit(1)
                     if record.hasIssues {
                         Text(record.issues.map(\.message).joined(separator: " · "))
                             .font(.caption)
-                            .foregroundStyle(.red)
+                            .foregroundStyle(record.issues.color)
                             .lineLimit(1)
                     }
                     if !record.summary.isEmpty {
@@ -165,11 +173,18 @@ struct SearchView: View {
                 .width(min: 120, ideal: 180)
         }
         .contextMenu(forSelectionType: DocumentRecord.ID.self) { ids in
+            let single = ids.count == 1 ? results.first { ids.contains($0.id) } : nil
+            if let single, single.issues.contains(where: \.isPageOrder) {
+                Button("Reihenfolge prüfen …") { editingPages = single }
+                Divider()
+            }
             Button("Öffnen") { open(ids) }
             Button("Bearbeiten …") {
                 if let id = ids.first { editing = results.first { $0.id == id } }
             }
             .disabled(ids.count != 1)
+            Button("Seiten bearbeiten …") { editingPages = single }
+                .disabled(single?.meta == nil)
             Button("Im Finder zeigen") {
                 NSWorkspace.shared.activateFileViewerSelecting(ids.map { URL(fileURLWithPath: $0) })
             }

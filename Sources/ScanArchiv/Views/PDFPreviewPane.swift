@@ -38,6 +38,14 @@ final class PDFPreviewModel {
         }
     }
 
+    /// Lädt das angezeigte Dokument neu (z. B. nach „Seiten bearbeiten“).
+    func reload() {
+        guard let url else { return }
+        let current = query
+        self.url = nil
+        show(url: url, query: current)
+    }
+
     /// Findet alle Suchwörter (wie im Archiv: Umlaute/Groß-Klein egal, Wortanfänge genügen).
     private func search() {
         hits = []
@@ -92,6 +100,8 @@ final class PDFPreviewModel {
 
 struct PDFPreviewPane: View {
     @Bindable var preview: PDFPreviewModel
+    /// „Seiten bearbeiten …“ für das angezeigte Dokument
+    var editPages: (() -> Void)?
     @FocusState private var searchFocused: Bool
     @State private var showInfo = false
 
@@ -147,7 +157,8 @@ struct PDFPreviewPane: View {
             Button { showInfo.toggle() } label: { Image(systemName: "info.circle") }
                 .help("Informationen zum Dokument")
                 .popover(isPresented: $showInfo, arrowEdge: .bottom) {
-                    DocumentInfoView(meta: preview.meta, url: preview.url, pageCount: preview.document?.pageCount ?? 0)
+                    DocumentInfoView(meta: preview.meta, url: preview.url, pageCount: preview.document?.pageCount ?? 0,
+                                     editPages: editPages.map { edit in { showInfo = false; edit() } })
                 }
             if let url = preview.url {
                 Button { NSWorkspace.shared.open(url) } label: { Image(systemName: "arrow.up.forward.app") }
@@ -233,6 +244,7 @@ private struct DocumentInfoView: View {
     let meta: DocumentMetadata?
     let url: URL?
     let pageCount: Int
+    var editPages: (() -> Void)?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -251,8 +263,11 @@ private struct DocumentInfoView: View {
             }
             if let issues = meta?.issues, !issues.isEmpty {
                 Divider()
-                Text("Zu prüfen").font(.subheadline.weight(.semibold)).foregroundStyle(.red)
-                ForEach(issues, id: \.self) { Label($0.message, systemImage: "exclamationmark.triangle").foregroundStyle(.red) }
+                Text("Zu prüfen").font(.subheadline.weight(.semibold)).foregroundStyle(issues.color)
+                ForEach(issues, id: \.self) { Label($0.message, systemImage: $0.symbol).foregroundStyle($0.color) }
+                if issues.contains(where: \.isPageOrder), let editPages {
+                    Button("Seiten bearbeiten …", action: editPages)
+                }
             }
         }
         .textSelection(.enabled)

@@ -100,6 +100,8 @@ public struct DocumentMetadata: Codable, Equatable, Sendable {
     public var updatedWith: String?
     /// Entstehung der Archivdatei (nil = ältere Version)
     public var storage: Storage?
+    /// Beim Import laut Seitenzahlen umsortiert: Indizes (ab 0) der Originalseiten in neuer Reihenfolge
+    public var pageOrder: [Int]?
 
     /// Aktuelle Programmversion; die App setzt sie beim Start aus dem Bundle (z. B. „ScanArchiv 1.1 (Build 202609191030)“).
     nonisolated(unsafe) public static var appName = "ScanArchiv"
