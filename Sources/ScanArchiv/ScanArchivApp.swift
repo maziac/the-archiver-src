@@ -1,3 +1,4 @@
+import ScanArchivCore
 import SwiftUI
 
 @main
@@ -6,7 +7,17 @@ struct ScanArchivApp: App {
     @State private var session: ScanSession
     @State private var inbox: InboxService
 
+    /// Programmversion aus dem Bundle, z. B. „ScanArchiv 1.1 (Build 202609191030)“
+    static var versionString: String {
+        let info = Bundle.main.infoDictionary
+        let version = info?["CFBundleShortVersionString"] as? String ?? "?"
+        let build = (info?["CFBundleVersion"] as? String).map { " (Build \($0))" } ?? ""
+        return "ScanArchiv \(version)\(build)"
+    }
+
     init() {
+        // wird in jedes neu erstellte bzw. geänderte Dokument geschrieben
+        DocumentMetadata.appName = Self.versionString
         let model = AppModel()
         let inbox = InboxService(model: model)
         _model = State(initialValue: model)

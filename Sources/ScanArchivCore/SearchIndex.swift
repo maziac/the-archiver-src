@@ -12,14 +12,23 @@ public struct DocumentRecord: Identifiable, Hashable, Sendable {
     public var summary: String
     /// Probleme bei der Verarbeitung (leer = alles in Ordnung)
     public var issues: [DocumentIssue] = []
+    /// vollständige Metadaten aus dem PDF (nil bei fremden PDFs)
+    public var meta: DocumentMetadata?
     /// Textausschnitt; Treffer sind mit \u{1}…\u{2} markiert.
-    public var snippet: String
+    public var snippet: String = ""
 
     public var url: URL { URL(fileURLWithPath: path) }
     public var fileName: String { url.lastPathComponent }
     /// Titel oder, falls leer, der Dateiname
     public var displayTitle: String { title.isEmpty ? fileName : title }
     public var hasIssues: Bool { !issues.isEmpty }
+
+    public static func == (a: DocumentRecord, b: DocumentRecord) -> Bool {
+        a.path == b.path && a.number == b.number && a.date == b.date && a.title == b.title && a.summary == b.summary
+            && a.issues == b.issues && a.snippet == b.snippet && a.meta == b.meta
+    }
+
+    public func hash(into hasher: inout Hasher) { hasher.combine(path) }
 }
 
 public enum SearchIndexError: LocalizedError {
@@ -30,13 +39,18 @@ public enum SearchIndexError: LocalizedError {
     }
 }
 
-/// Volltextindex (SQLite FTS5) über alle Archiv-PDFs.
+/// Volltextindex (SQLite FTS5) über alle Archiv-PDFs. Reiner Cache: Alle Angaben stammen aus den PDFs
+/// und lassen sich per `sync(full: true)` vollständig wiederherstellen.
 public final class SearchIndex: @unchecked Sendable {
     public static let fileName = ".scanarchiv-index.sqlite"
-    static let schemaVersion: Int32 = 3
+    static let schemaVersion: Int32 = 4
     private var db: OpaquePointer?
     private let lock = NSLock()
     private static let transient = unsafeBitCast(-1, to: sqlite3_destructor_type.self)
+
+    /// Spalten in fester Reihenfolge (Indizes werden unten beim Lesen verwendet)
+    private static let columns = "number, date, path, pages, issues, archivedAt, source, sha256, meta, originalName, title, summary, text"
+    private static let textColumn: Int32 = 12
 
     public init(url: URL) throws {
         guard sqlite3_open(url.path, &db) == SQLITE_OK else {
@@ -50,7 +64,9 @@ public final class SearchIndex: @unchecked Sendable {
         // number enthält "000123 123", damit auch Suchen ohne führende Nullen treffen.
         try exec("""
             CREATE VIRTUAL TABLE IF NOT EXISTS docs USING fts5(
-                number, date UNINDEXED, path UNINDEXED, pages UNINDEXED, issues UNINDEXED, title, summary, text,
+                number, date UNINDEXED, path UNINDEXED, pages UNINDEXED, issues UNINDEXED,
+                archivedAt UNINDEXED, source UNINDEXED, sha256 UNINDEXED, meta UNINDEXED,
+                originalName, title, summary, text,
                 tokenize = 'unicode61 remove_diacritics 2')
             """)
     }
@@ -64,17 +80,32 @@ public final class SearchIndex: @unchecked Sendable {
     // MARK: Schreiben
 
     public func add(number: Int, date: Date, url: URL, pages: Int, text: String, title: String = "", summary: String = "",
-                    issues: [DocumentIssue] = []) throws {
+                    meta: DocumentMetadata? = nil) throws {
         lock.lock(); defer { lock.unlock() }
         try run("DELETE FROM docs WHERE path = ?", [url.path])
-        try run("INSERT INTO docs(number, date, path, pages, issues, title, summary, text) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-                [SearchIndex.numberField(number), date.timeIntervalSince1970, url.path, pages, DocumentIssue.encode(issues),
+        try run("INSERT INTO docs(\(SearchIndex.columns)) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                [SearchIndex.numberField(number), date.timeIntervalSince1970, url.path, pages,
+                 DocumentIssue.encode(meta?.issues ?? []),
+                 meta?.archivedAt.timeIntervalSince1970 ?? 0, meta?.source.rawValue ?? "", meta?.originalSHA256 ?? "",
+                 (try? meta?.encoded()) ?? "", meta?.originalFileName ?? "",
                  title, summary, text])
     }
 
-    public func setIssues(_ issues: [DocumentIssue], number: Int) throws {
+    /// Nach Bearbeiten/Umbenennen: Pfad, Datum, Titel, Beschreibung und Metadaten aktualisieren.
+    public func update(oldPath: String, newURL: URL, date: Date, title: String, summary: String,
+                       meta: DocumentMetadata? = nil) throws {
         lock.lock(); defer { lock.unlock() }
-        try run("UPDATE docs SET issues = ? WHERE number = ?", [DocumentIssue.encode(issues), SearchIndex.numberField(number)])
+        try run("UPDATE docs SET path = ?, date = ?, title = ?, summary = ? WHERE path = ?",
+                [newURL.path, date.timeIntervalSince1970, title, summary, oldPath])
+        if let meta {
+            try run("UPDATE docs SET meta = ?, issues = ? WHERE path = ?",
+                    [(try? meta.encoded()) ?? "", DocumentIssue.encode(meta.issues), newURL.path])
+        }
+    }
+
+    public func remove(path: String) throws {
+        lock.lock(); defer { lock.unlock() }
+        try run("DELETE FROM docs WHERE path = ?", [path])
     }
 
     public func countWithIssues() throws -> Int {
@@ -82,21 +113,18 @@ public final class SearchIndex: @unchecked Sendable {
         return try query("SELECT count(*) FROM docs WHERE issues != ''", []) { Int(sqlite3_column_int($0, 0)) }.first ?? 0
     }
 
+    /// Bereits archiviertes Dokument mit derselben Prüfsumme der Originaldatei (Duplikaterkennung).
+    public func record(forSHA256 sha: String) throws -> (number: Int, path: String)? {
+        guard !sha.isEmpty else { return nil }
+        lock.lock(); defer { lock.unlock() }
+        return try query("SELECT number, path FROM docs WHERE sha256 = ? LIMIT 1", [sha]) {
+            (Int(SearchIndex.text($0, 0).split(separator: " ").first ?? "") ?? 0, SearchIndex.text($0, 1))
+        }.first
+    }
+
     /// "000123 123", damit auch Suchen ohne führende Nullen treffen.
     static func numberField(_ number: Int) -> String {
         "\(Archive.formatNumber(number)) \(number)"
-    }
-
-    /// Nach Bearbeiten/Umbenennen: Pfad, Datum, Titel und Beschreibung aktualisieren.
-    public func update(oldPath: String, newURL: URL, date: Date, title: String, summary: String) throws {
-        lock.lock(); defer { lock.unlock() }
-        try run("UPDATE docs SET path = ?, date = ?, title = ?, summary = ? WHERE path = ?",
-                [newURL.path, date.timeIntervalSince1970, title, summary, oldPath])
-    }
-
-    public func remove(path: String) throws {
-        lock.lock(); defer { lock.unlock() }
-        try run("DELETE FROM docs WHERE path = ?", [path])
     }
 
     /// Dokumente ohne Titel samt Volltext – für das nachträgliche Erzeugen von Titeln.
@@ -117,26 +145,28 @@ public final class SearchIndex: @unchecked Sendable {
         return try query("SELECT text FROM docs WHERE path = ?", [path]) { SearchIndex.text($0, 0) }.first ?? ""
     }
 
-    /// Nimmt ein vorhandenes PDF (Text via PDFKit) in den Index auf.
-    public func addExisting(_ url: URL, issues: [DocumentIssue] = []) throws {
+    /// Nimmt ein vorhandenes PDF in den Index auf: Metadaten aus dem PDF, Text via PDFKit.
+    public func addExisting(_ url: URL) throws {
         guard let pdf = PDFDocument(url: url) else { return }
+        let meta = PDFMetadata.read(pdf)
         let parsed = Archive.parse(fileName: url.lastPathComponent)
-        let date = parsed?.date
+        let date = meta?.documentDate ?? parsed?.date
             ?? (try? url.resourceValues(forKeys: [.creationDateKey]).creationDate)
             ?? Date()
         let attributes = pdf.documentAttributes ?? [:]
         var title = attributes[PDFDocumentAttribute.titleAttribute] as? String ?? ""
         var summary = attributes[PDFDocumentAttribute.subjectAttribute] as? String ?? ""
-        // Platzhalter aus Version 1 (Dateistamm als Titel, Stempeltext als Betreff) gelten als leer.
+        // Platzhalter (Dateistamm als Titel, Stempeltext als Betreff) gelten als leer.
         if title.wholeMatch(of: #/\d{4}-\d{2}-\d{2}_\d{6,}/#) != nil { title = "" }
         if summary.hasPrefix("Nr. ") { summary = "" }
-        try add(number: parsed?.number ?? 0, date: date, url: url, pages: pdf.pageCount, text: pdf.string ?? "",
-                title: title, summary: summary, issues: issues)
+        try add(number: meta?.number ?? parsed?.number ?? 0, date: date, url: url, pages: pdf.pageCount,
+                text: pdf.string ?? "", title: title, summary: summary, meta: meta)
     }
 
     /// Gleicht den Index mit dem Ordner ab: neue PDFs aufnehmen, gelöschte entfernen.
-    /// Mit `full` wird alles neu eingelesen. `issues` liefert die gespeicherten Probleme je Nummer.
-    public func sync(folder: URL, full: Bool = false, issues: (Int) -> [DocumentIssue] = { _ in [] }) throws {
+    /// Mit `full` wird alles neu eingelesen. `migrate` wird für Archiv-PDFs ohne ScanArchiv-Metadaten
+    /// aufgerufen (Altbestand) und kann sie vor dem Einlesen ergänzen.
+    public func sync(folder: URL, full: Bool = false, migrate: ((URL) -> Void)? = nil) throws {
         let files = ((try? FileManager.default.contentsOfDirectory(at: folder, includingPropertiesForKeys: nil)) ?? [])
             .filter { $0.pathExtension.lowercased() == "pdf" }
         let onDisk = Set(files.map(\.path))
@@ -150,7 +180,10 @@ public final class SearchIndex: @unchecked Sendable {
             try run("DELETE FROM docs WHERE path = ?", [path])
         }
         for url in files where !indexed.contains(url.path) {
-            try addExisting(url, issues: Archive.parse(fileName: url.lastPathComponent).map { issues($0.number) } ?? [])
+            if let migrate, Archive.parse(fileName: url.lastPathComponent) != nil, PDFMetadata.read(url: url) == nil {
+                migrate(url)
+            }
+            try addExisting(url)
         }
     }
 
@@ -163,6 +196,7 @@ public final class SearchIndex: @unchecked Sendable {
         lock.lock(); defer { lock.unlock() }
         let match = SearchIndex.matchExpression(for: query)
         let issueFilter = onlyIssues ? "issues != ''" : "1"
+        let order = "ORDER BY CAST(substr(number, 1, instr(number, ' ') - 1) AS INTEGER) DESC, path LIMIT ?"
         let map: (OpaquePointer?) -> DocumentRecord = { stmt in
             let numberField = SearchIndex.text(stmt, 0)
             return DocumentRecord(
@@ -173,18 +207,18 @@ public final class SearchIndex: @unchecked Sendable {
                 title: SearchIndex.text(stmt, 5),
                 summary: SearchIndex.text(stmt, 6),
                 issues: DocumentIssue.decode(SearchIndex.text(stmt, 4)),
-                snippet: SearchIndex.text(stmt, 7)
-                    .replacingOccurrences(of: "\n", with: " "))
+                meta: DocumentMetadata.decode(SearchIndex.text(stmt, 7)),
+                snippet: SearchIndex.text(stmt, 8).replacingOccurrences(of: "\n", with: " "))
         }
+        let fields = "number, date, path, pages, issues, title, summary, meta"
         if let match {
             return try self.query("""
-                SELECT number, date, path, pages, issues, title, summary, snippet(docs, 7, char(1), char(2), '…', 16)
-                FROM docs WHERE docs MATCH ? AND \(issueFilter) ORDER BY CAST(substr(number, 1, instr(number, ' ') - 1) AS INTEGER) DESC, path LIMIT ?
+                SELECT \(fields), snippet(docs, \(SearchIndex.textColumn), char(1), char(2), '…', 16)
+                FROM docs WHERE docs MATCH ? AND \(issueFilter) \(order)
                 """, [match, limit], map)
         }
         return try self.query("""
-            SELECT number, date, path, pages, issues, title, summary, substr(text, 1, 160)
-            FROM docs WHERE \(issueFilter) ORDER BY CAST(substr(number, 1, instr(number, ' ') - 1) AS INTEGER) DESC, path LIMIT ?
+            SELECT \(fields), substr(text, 1, 160) FROM docs WHERE \(issueFilter) \(order)
             """, [limit], map)
     }
 

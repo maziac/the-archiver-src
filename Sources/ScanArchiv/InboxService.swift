@@ -16,6 +16,8 @@ final class InboxService {
             case processing(String)
             case done(ImportResult)
             case failed(String)
+            /// schon als diese Nummer archiviert (gleiche Prüfsumme)
+            case duplicate(number: Int, archived: URL)
         }
 
         let id = UUID()
@@ -44,8 +46,10 @@ final class InboxService {
     var processingCount: Int { items.filter { if case .processing = $0.state { return true }; return false }.count }
     var doneCount: Int { items.filter { if case .done = $0.state { return true }; return false }.count }
     var failedCount: Int { items.filter { if case .failed = $0.state { return true }; return false }.count }
+    var duplicateCount: Int { items.filter { if case .duplicate = $0.state { return true }; return false }.count }
 
     static let errorFolderName = "Fehler"
+    static let duplicateFolderName = "Duplikate"
     /// Dateien, die gerade noch heruntergeladen/geschrieben werden
     private static let partialExtensions: Set<String> = ["download", "crdownload", "part", "partial", "tmp"]
     /// So lange müssen Größe und Änderungsdatum unverändert sein, bevor eine Datei übernommen wird.
@@ -67,6 +71,7 @@ final class InboxService {
     }
 
     var errorFolder: URL? { folder?.appendingPathComponent(Self.errorFolderName, isDirectory: true) }
+    var duplicateFolder: URL? { folder?.appendingPathComponent(Self.duplicateFolderName, isDirectory: true) }
 
     // MARK: Überwachung
 
@@ -225,25 +230,38 @@ final class InboxService {
     private func runWorker() async {
         defer { worker = nil }
         while !isPaused, let i = items.firstIndex(where: { if case .waiting = $0.state { return true }; return false }) {
-            guard let archive = model.archive, let index = model.index, let issueStore = model.issueStore else {
+            guard let archive = model.archive, let index = model.index else {
                 error = model.error ?? "Kein Archiv geöffnet – der Eingang wartet."
                 return
             }
             let id = items[i].id
             let url = items[i].url
             items[i].state = .processing("Wird gelesen …")
-            let quality = UserDefaults.standard.double(forKey: SettingsKey.jpegQuality)
+            let options = SettingsKey.importOptions
 
             do {
                 let result = try await ImportProcessor.process(
-                    file: url, archive: archive, index: index, issueStore: issueStore, jpegQuality: quality
-                ) { [weak self] step in
+                    file: url, archive: archive, index: index, options: options
+                ) { [weak self] (step: String) in
                     Task { @MainActor in self?.update(id) { if case .processing = $0.state { $0.state = .processing(step) } } }
                 }
                 removeFromInbox(url)
                 update(id) { $0.state = .done(result) }
                 model.didSave()
                 Self.log.info("Archiviert: \(url.lastPathComponent, privacy: .public) → \(result.url.lastPathComponent, privacy: .public)")
+            } catch let ImportError.duplicate(number, path) {
+                // schon archiviert: nicht erneut aufnehmen, Datei zur Kontrolle aufheben
+                var target = url
+                if let duplicateFolder {
+                    try? FileManager.default.createDirectory(at: duplicateFolder, withIntermediateDirectories: true)
+                    let destination = Self.uniqueURL(for: url.lastPathComponent, in: duplicateFolder)
+                    if (try? FileManager.default.moveItem(at: url, to: destination)) != nil { target = destination }
+                }
+                update(id) {
+                    $0.url = target
+                    $0.state = .duplicate(number: number, archived: URL(fileURLWithPath: path))
+                }
+                Self.log.info("Duplikat: \(url.lastPathComponent, privacy: .public) = Nr. \(number)")
             } catch {
                 var target = url
                 if let errorFolder, FileManager.default.fileExists(atPath: url.path) {

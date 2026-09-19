@@ -35,7 +35,7 @@ public enum PDFStamper {
     }
 
     public static func stamp(source: URL, pages: [PageEdit], number: Int, date: Date,
-                             title: String, summary: String) throws -> Data {
+                             title: String, summary: String, meta: DocumentMetadata? = nil) throws -> Data {
         let delegate = StampDelegate()
         guard let pdf = PDFDocument(url: source) else { throw ArchiveError.unreadablePDF(source) }
         pdf.delegate = delegate
@@ -54,6 +54,11 @@ public enum PDFStamper {
             pdf.insert(page, at: position)
         }
 
+        if let meta {
+            try PDFMetadata.apply(meta, title: title, summary: summary, to: pdf)
+            guard let data = pdf.dataRepresentation() else { throw ArchiveError.cannotWrite(source) }
+            return data
+        }
         let numberText = Archive.formatNumber(number)
         var attributes = pdf.documentAttributes ?? [:]
         attributes[PDFDocumentAttribute.titleAttribute] = title.isEmpty

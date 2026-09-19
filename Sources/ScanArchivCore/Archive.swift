@@ -121,26 +121,89 @@ public final class Archive: @unchecked Sendable {
 
     // MARK: Nachträgliche Bearbeitung
 
-    /// Schreibt Titel/Beschreibung in die PDF-Metadaten und benennt Archivdateien passend zu
-    /// Datum und Titel um. Liefert die (ggf. neue) URL. Fremde PDFs behalten ihren Namen.
-    public func updateMetadata(url: URL, date: Date, title: String, summary: String) throws -> URL {
+    /// Schreibt Datum, Titel und Beschreibung ins PDF (Standardfelder + ScanArchiv-Metadaten) und benennt
+    /// Archivdateien passend um. `change` passt die übrigen Metadaten an (z. B. Probleme, Herkunft).
+    /// Liefert die (ggf. neue) URL und die gespeicherten Metadaten. Fremde PDFs behalten ihren Namen.
+    @discardableResult
+    public func updateMetadata(url: URL, date: Date, title: String, summary: String,
+                               change: (inout DocumentMetadata) -> Void = { _ in }) throws -> (url: URL, meta: DocumentMetadata?) {
         lock.lock(); defer { lock.unlock() }
         guard let pdf = PDFDocument(url: url) else { throw ArchiveError.unreadablePDF(url) }
         let parsed = Archive.parse(fileName: url.lastPathComponent)
         let newName = parsed.map { Archive.fileName(date: date, number: $0.number, title: title) } ?? url.lastPathComponent
 
-        var attributes = pdf.documentAttributes ?? [:]
-        attributes[PDFDocumentAttribute.titleAttribute] = title.isEmpty ? (newName as NSString).deletingPathExtension : title
-        attributes[PDFDocumentAttribute.subjectAttribute] = summary
-        pdf.documentAttributes = attributes
+        var meta = PDFMetadata.read(pdf) ?? parsed.map { _ in Archive.legacyMetadata(url: url, pdf: pdf, issues: []) }
+        if var current = meta {
+            current.documentDate = date
+            change(&current)
+            current.updatedWith = DocumentMetadata.appName
+            try PDFMetadata.apply(current, title: title, summary: summary, to: pdf)
+            meta = current
+        } else {
+            var attributes = pdf.documentAttributes ?? [:]
+            attributes[PDFDocumentAttribute.titleAttribute] = title.isEmpty ? (newName as NSString).deletingPathExtension : title
+            attributes[PDFDocumentAttribute.subjectAttribute] = summary
+            pdf.documentAttributes = attributes
+        }
 
+        try write(pdf, to: url)
+        guard newName != url.lastPathComponent else { return (url, meta) }
+        let newURL = url.deletingLastPathComponent().appendingPathComponent(newName)
+        try FileManager.default.moveItem(at: url, to: newURL)
+        return (newURL, meta)
+    }
+
+    /// Altbestand (ohne ScanArchiv-Metadaten): Metadaten aus Dateiname, Titel, Dateidatum und alten
+    /// Problem-Vermerken zusammensetzen und ins PDF schreiben.
+    public func migrateLegacy(url: URL, issues: [DocumentIssue]) throws {
+        lock.lock(); defer { lock.unlock() }
+        guard let pdf = PDFDocument(url: url), PDFMetadata.read(pdf) == nil, Archive.parse(fileName: url.lastPathComponent) != nil
+        else { return }
+        let attributes = pdf.documentAttributes ?? [:]
+        var title = attributes[PDFDocumentAttribute.titleAttribute] as? String ?? ""
+        if title.wholeMatch(of: #/\d{4}-\d{2}-\d{2}_\d{6,}/#) != nil { title = "" }
+        var summary = attributes[PDFDocumentAttribute.subjectAttribute] as? String ?? ""
+        if summary.hasPrefix("Nr. ") { summary = "" }
+        try PDFMetadata.apply(Archive.legacyMetadata(url: url, pdf: pdf, issues: issues), title: title, summary: summary, to: pdf)
+        try write(pdf, to: url)
+    }
+
+    /// Korrigiert Altbestand, der mit einer früheren Fassung der Migration falsch beschriftet wurde
+    /// (Erstellversion „ScanArchiv 1.0“, Textherkunft „eigener Text“). Liefert true, wenn geändert.
+    @discardableResult
+    public func repairLegacyMetadata(url: URL) throws -> Bool {
+        lock.lock(); defer { lock.unlock() }
+        guard let pdf = PDFDocument(url: url), var meta = PDFMetadata.read(pdf),
+              meta.source == .unknown, meta.app != DocumentMetadata.legacyAppName else { return false }
+        meta.app = DocumentMetadata.legacyAppName
+        meta.pages = meta.pages.map { $0 == .embedded ? .unknown : $0 }
+        meta.updatedWith = DocumentMetadata.appName
+        let attributes = pdf.documentAttributes ?? [:]
+        try PDFMetadata.apply(meta, title: attributes[PDFDocumentAttribute.titleAttribute] as? String ?? "",
+                              summary: attributes[PDFDocumentAttribute.subjectAttribute] as? String ?? "", to: pdf)
+        try write(pdf, to: url)
+        return true
+    }
+
+    static func legacyMetadata(url: URL, pdf: PDFDocument, issues: [DocumentIssue]) -> DocumentMetadata {
+        let parsed = Archive.parse(fileName: url.lastPathComponent)
+        let attributes = pdf.documentAttributes ?? [:]
+        let title = attributes[PDFDocumentAttribute.titleAttribute] as? String ?? ""
+        let hasTitle = !title.isEmpty && title.wholeMatch(of: #/\d{4}-\d{2}-\d{2}_\d{6,}/#) == nil
+        let archivedAt = attributes[PDFDocumentAttribute.creationDateAttribute] as? Date
+            ?? (try? url.resourceValues(forKeys: [.creationDateKey]).creationDate) ?? Date()
+        let pages = (0..<pdf.pageCount).map { i -> DocumentMetadata.TextSource in
+            DocumentIssue.hasText(pdf.page(at: i)?.string ?? "") ? .unknown : .none
+        }
+        return DocumentMetadata(number: parsed?.number ?? 0, documentDate: parsed?.date ?? archivedAt, dateSource: .unknown,
+                                titleSource: hasTitle ? .ai : .none, archivedAt: archivedAt, source: .unknown,
+                                pages: pages, issues: issues, app: DocumentMetadata.legacyAppName, updatedWith: DocumentMetadata.appName)
+    }
+
+    /// Schreibt atomar über eine temporäre Datei im selben Ordner.
+    private func write(_ pdf: PDFDocument, to url: URL) throws {
         let temp = url.deletingLastPathComponent().appendingPathComponent(".tmp-\(UUID().uuidString).pdf")
         guard pdf.write(to: temp) else { throw ArchiveError.cannotWrite(url) }
         _ = try FileManager.default.replaceItemAt(url, withItemAt: temp)
-
-        guard newName != url.lastPathComponent else { return url }
-        let newURL = url.deletingLastPathComponent().appendingPathComponent(newName)
-        try FileManager.default.moveItem(at: url, to: newURL)
-        return newURL
     }
 }

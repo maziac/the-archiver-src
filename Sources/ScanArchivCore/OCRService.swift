@@ -19,7 +19,9 @@ public enum OCRService {
     /// laufen alle Erkennungen nacheinander auf einer eigenen Queue.
     private static let queue = DispatchQueue(label: "de.local.scanarchiv.ocr", qos: .userInitiated)
 
-    public static func recognize(_ image: CGImage, languages: [String] = ["de-DE", "en-US"]) async throws -> [OCRLine] {
+    public static let defaultLanguages = ["de-DE", "en-US"]
+
+    public static func recognize(_ image: CGImage, languages: [String] = defaultLanguages) async throws -> [OCRLine] {
         try await withCheckedThrowingContinuation { continuation in
             queue.async {
                 continuation.resume(with: Result { try recognizeBlocking(image, languages: languages) })

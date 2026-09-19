@@ -127,7 +127,15 @@ struct SearchView: View {
             }
             TableColumn("Seiten") { Text("\($0.pages)").monospacedDigit() }
                 .width(44)
-            TableColumn("Datei") { Text($0.fileName).foregroundStyle(.secondary).lineLimit(2) }
+            TableColumn("Datei") { record in
+                Text(record.fileName)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(2)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .contentShape(Rectangle())
+                    .help(DocumentInfo.tooltip(meta: record.meta, fileName: record.fileName,
+                                               fileSize: DocumentInfo.fileSize(of: record.url), pageCount: record.pages))
+            }
                 .width(min: 120, ideal: 180)
         }
         .contextMenu(forSelectionType: DocumentRecord.ID.self) { ids in
@@ -142,7 +150,9 @@ struct SearchView: View {
             let withIssues = results.filter { ids.contains($0.id) && $0.hasIssues }
             if !withIssues.isEmpty {
                 Button("Als geprüft markieren") {
-                    do { try model.markReviewed(withIssues) } catch { self.error = error.localizedDescription }
+                    Task {
+                        do { try await model.markReviewed(withIssues) } catch { self.error = error.localizedDescription }
+                    }
                 }
             }
             Divider()
@@ -266,6 +276,8 @@ private struct EditDocumentSheet: View {
     @State private var summary: String
     @State private var busy = false
     @State private var message: String?
+    /// Werte stammen aus „Neu vorschlagen“ (Apple Intelligence)
+    @State private var suggested = false
 
     init(record: DocumentRecord) {
         self.record = record
@@ -315,6 +327,7 @@ private struct EditDocumentSheet: View {
         Task {
             do {
                 let suggestion = try await model.suggestion(forPath: record.path)
+                suggested = true
                 title = suggestion.title
                 summary = suggestion.summary
                 if let date = suggestion.date { self.date = date }
@@ -329,10 +342,12 @@ private struct EditDocumentSheet: View {
         busy = true
         Task {
             do {
-                // Datum gilt als bestätigt, wenn es geändert wurde
+                // Geänderte Angaben gelten als von Hand gesetzt
                 let dateChanged = !Calendar.current.isDate(date, inSameDayAs: record.date)
+                let textChanged = title != record.title || summary != record.summary
                 try await model.updateDocument(path: record.path, date: date, title: title, summary: summary,
-                                               dateConfirmed: dateChanged)
+                                               titleSource: textChanged ? (suggested ? .ai : .manual) : nil,
+                                               dateSource: dateChanged ? (suggested ? .ai : .manual) : nil)
                 dismiss()
             } catch {
                 message = error.localizedDescription

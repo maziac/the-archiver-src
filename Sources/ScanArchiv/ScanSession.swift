@@ -53,6 +53,8 @@ final class ScanSession {
     var summary = "" { didSet { if !applying { summaryEdited = true } } }
     var documentDate = Date() { didSet { if !applying { dateSource = .manual } } }
     private(set) var dateSource: DateSource = .today
+    /// Datum stammt von Apple Intelligence (sonst direkt aus dem Text)
+    @ObservationIgnored private var dateFromAI = false
     private(set) var suggestionState: SuggestionState = .idle
     /// Probleme des zuletzt gespeicherten Dokuments (für die Anzeige nach dem Speichern)
     private(set) var savedIssues: [DocumentIssue] = []
@@ -81,7 +83,9 @@ final class ScanSession {
     }
 
     private var dpi: Int { UserDefaults.standard.integer(forKey: SettingsKey.dpi) }
-    private var color: Bool { UserDefaults.standard.bool(forKey: SettingsKey.color) }
+    private var scanColorMode: ColorMode { SettingsKey.colorMode(SettingsKey.scanColorMode) }
+    /// Farbe nur bei „Farbe/Original“; Graustufen und Schwarz-Weiß werden grau gescannt
+    private var color: Bool { scanColorMode == .original }
 
     // MARK: Scannen
 
@@ -234,7 +238,10 @@ final class ScanSession {
                     if !titleEdited { title = suggestion.title }
                     if !summaryEdited { summary = suggestion.summary }
                 }
-                if dateSource != .manual, let date = suggestion.date { applyDate(date) }
+                if dateSource != .manual, let date = suggestion.date {
+                    applyDate(date)
+                    dateFromAI = true
+                }
                 suggestionState = .done
             } catch {
                 if !Task.isCancelled { suggestionState = .failed(error.localizedDescription) }
@@ -245,6 +252,7 @@ final class ScanSession {
     private func applyDate(_ date: Date?) {
         withoutEditTracking { documentDate = date ?? Date() }
         dateSource = date == nil ? .today : .document
+        dateFromAI = false
     }
 
     /// OCR einer Seite in ihrer aktuellen Drehung, aus dem Cache oder neu erkannt.
@@ -271,7 +279,7 @@ final class ScanSession {
     // MARK: Speichern
 
     func save() {
-        guard let archive = model.archive, let index = model.index, let issueStore = model.issueStore else {
+        guard let archive = model.archive, let index = model.index else {
             phase = .failed(model.error ?? "Kein Archivordner.")
             return
         }
@@ -282,9 +290,10 @@ final class ScanSession {
         let summary = summary.trimmingCharacters(in: .whitespacesAndNewlines)
         let snapshot = pages
         let dpi = Double(dpi)
-        let quality = UserDefaults.standard.double(forKey: SettingsKey.jpegQuality)
+        let preset = SettingsKey.preset(SettingsKey.scanPreset)
+        let colorMode = scanColorMode
 
-        // Probleme, die schon jetzt feststehen
+        // Probleme und Herkunft, die schon jetzt feststehen
         var issues: [DocumentIssue] = []
         if title.isEmpty {
             switch suggestionState {
@@ -293,12 +302,21 @@ final class ScanSession {
             }
         }
         if dateSource == .today { issues.append(.noDate) }
+        let metaDateSource: DocumentMetadata.DateSource = switch dateSource {
+        case .document: dateFromAI ? .ai : .text
+        case .today: .today
+        case .manual: .manual
+        }
+        let titleSource: DocumentMetadata.TitleSource = title.isEmpty ? .none : (titleEdited || summaryEdited ? .manual : .ai)
+        let scanInfo = DocumentMetadata.ScanInfo(scanner: scanner.selected?.name, dpi: Int(dpi), colorMode: colorMode)
 
         Task {
             do {
-                // Texterkennung für alle Seiten (meist schon im Hintergrund erledigt)
+                // Texterkennung für alle Seiten (meist schon im Hintergrund erledigt), dann komprimieren
                 var pdfPages: [PDFPageInput] = []
+                var textSources: [DocumentMetadata.TextSource] = []
                 var emptyPages: [Int] = []
+                var texts: [String] = []
                 for (i, page) in snapshot.enumerated() {
                     let lines: [OCRLine]
                     if let cached = ocrCache[page.id], cached.rotated == page.rotated180 {
@@ -307,24 +325,43 @@ final class ScanSession {
                         phase = .processing("Texterkennung Seite \(i + 1) von \(snapshot.count) …")
                         lines = try await Self.recognize(url: page.url, rotated: page.rotated180)
                     }
-                    if !DocumentIssue.hasText(lines.map(\.text).joined(separator: " ")) { emptyPages.append(i + 1) }
+                    let text = lines.map(\.text).joined(separator: "\n")
+                    let hasText = DocumentIssue.hasText(text)
+                    if !hasText { emptyPages.append(i + 1) }
+                    textSources.append(hasText ? .ocr : .none)
+                    texts.append(text)
+                    phase = .processing("Seite \(i + 1) von \(snapshot.count) wird komprimiert …")
                     let image = try await Self.loadImage(url: page.url, rotated: page.rotated180)
-                    pdfPages.append(PDFPageInput(image: image, lines: lines))
+                    let size = CGSize(width: Double(image.width) / dpi * 72, height: Double(image.height) / dpi * 72)
+                    let encoded = await Task.detached {
+                        PageCompressor.encode(image, pageSize: size, preset: preset, color: colorMode)
+                    }.value
+                    pdfPages.append(PDFPageInput(encoded: encoded, lines: lines))
                 }
                 if !emptyPages.isEmpty { issues.insert(.noText(pages: emptyPages), at: 0) }
                 phase = .processing("PDF wird gespeichert …")
 
+                var meta = DocumentMetadata(
+                    number: 0, documentDate: date, dateSource: metaDateSource, titleSource: titleSource,
+                    titleUpdated: title.isEmpty ? nil : Date(), archivedAt: Date(), source: .scan, scan: scanInfo,
+                    pages: textSources, ocr: .init(), issues: issues)
                 let pagesToSave = pdfPages
-                let saved = try await Task.detached(priority: .userInitiated) {
-                    try archive.save(date: date, title: title) { number in
-                        try PDFBuilder.build(pages: pagesToSave, number: number, date: date, dpi: dpi, jpegQuality: quality,
-                                             title: title, summary: summary)
+                let draft = meta
+                let saved = try await Task.detached(priority: .userInitiated) { () throws -> (number: Int, url: URL, meta: DocumentMetadata) in
+                    var stored = draft
+                    let result = try archive.save(date: date, title: title) { number in
+                        let data = try PDFBuilder.build(pages: pagesToSave, number: number, date: date, dpi: dpi,
+                                                        title: title, summary: summary)
+                        stored.number = number
+                        stored.compression = .init(preset: preset, colorMode: colorMode, applied: preset != .original,
+                                                   originalBytes: nil, resultBytes: data.count)
+                        return try PDFMetadata.finalize(data, meta: stored, title: title, summary: summary)
                     }
+                    return (result.number, result.url, stored)
                 }.value
-                let text = pdfPages.map { $0.lines.map(\.text).joined(separator: "\n") }.joined(separator: "\n\n")
-                try issueStore.set(issues, for: saved.number)
-                try index.add(number: saved.number, date: date, url: saved.url, pages: pdfPages.count, text: text,
-                              title: title, summary: summary, issues: issues)
+                meta = saved.meta
+                try index.add(number: saved.number, date: date, url: saved.url, pages: pdfPages.count,
+                              text: texts.joined(separator: "\n\n"), title: title, summary: summary, meta: meta)
                 model.didSave()
                 reset()
                 savedIssues = issues

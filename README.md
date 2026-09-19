@@ -47,12 +47,15 @@ Vorhandene PDFs und Bilder werden vollautomatisch archiviert, ohne Vorschau:
 - Die Dateien laufen **nacheinander** durch: Text (eingebettet oder per OCR) → Titel, Beschreibung, Datum →
   Nummer, Stempel → Archiv. Danach wandert die Datei aus dem Eingang **in den Papierkorb**.
 - Nicht verarbeitbare Dateien (defekt, unbekanntes Format) kommen nach **`Eingang/Fehler`**.
+- **Duplikate:** Die App merkt sich eine Prüfsumme (SHA-256) jeder importierten Originaldatei. Ist dieselbe
+  Datei schon archiviert, wird sie nicht erneut aufgenommen, sondern nach **`Eingang/Duplikate`** verschoben
+  und als „Duplikat von Nr. …“ gemeldet.
   Rechtsklick → „Erneut versuchen“ legt sie zurück in den Eingang.
 - Die Liste zeigt wartende, laufende und fertige Dateien. Ein Doppelklick öffnet das Ergebnis.
   „Pause“ hält die Verarbeitung nach der aktuellen Datei an.
 
-PDFs bleiben dabei inhaltlich unverändert: Text, Bilder in Originalauflösung und Farbe, Links und
-Lesezeichen bleiben erhalten. Seiten mit eigenem Text werden nicht erneut erkannt; Seiten, die nur ein
+PDFs bleiben dabei (mit der Standardeinstellung „Original“) inhaltlich unverändert: Text, Bilder in
+Originalauflösung und Farbe, Links und Lesezeichen bleiben erhalten. Seiten mit eigenem Text werden nicht erneut erkannt; Seiten, die nur ein
 Bild sind, bekommen eine unsichtbare OCR-Textebene. Hinzu kommen nur der rote Stempel und die Metadaten.
 Für Titel, Beschreibung und Datum werden die ersten zwei Seiten verwendet.
 
@@ -68,7 +71,7 @@ als „zu prüfen“ markiert:
 Solche Dokumente erscheinen im Archiv **rot** mit ⚠︎, der Tooltip nennt die Gründe. Der Schalter
 **„Nur mit Problemen“** filtert sie, auch kombiniert mit der Suche. Die Markierung verschwindet, sobald
 du Titel bzw. Datum über „Bearbeiten …“ ergänzt, über „Titel erzeugen“ oder mit Rechtsklick →
-**„Als geprüft markieren“**. Die Vermerke liegen dauerhaft in `.scanarchiv-issues.json` im Archivordner.
+**„Als geprüft markieren“**. Die Vermerke stehen im PDF selbst (siehe unten).
 
 Im Archiv lassen sich Datum, Titel und Beschreibung per Rechtsklick → **Bearbeiten …** ändern. Die Datei
 wird dabei umbenannt. Der Stempel auf Seite 1 behält das Datum vom Speichern.
@@ -91,9 +94,58 @@ Intelligence funktioniert alles andere weiter, und das Datum wird trotzdem aus d
 Stehen alle Rückseiten auf dem Kopf (Stapel über die kurze Kante gewendet), in den Einstellungen (⌘,)
 **Rückseiten automatisch um 180° drehen** einschalten.
 
+## Kompression
+
+In den Einstellungen gibt es je eine Größenvorgabe für **Scans**, **importierte PDFs** und **importierte
+Bilder**: *Original (keine Kompression)* oder ca. **300 / 150 / 80 / 40 KB pro A4-Seite**. Dazu kommt ein
+Farbmodus: *Farbe/Original*, *Graustufen* oder *Schwarz-Weiß (1 Bit)*.
+
+- Umgewandelt werden nur **Bildseiten** (Scans). Seiten mit echtem Text bleiben als Vektor unverändert.
+- **Die kleinere Datei gewinnt:** Ist die umgewandelte Fassung nicht kleiner als das Original, bleibt das
+  Original. Bei sauberen Seiten wird auch verlustfrei gespeichert, wenn das kleiner ist als JPEG.
+- Importierte JPEGs werden mit „Original“ ohne erneute Kompression übernommen.
+- Die Zielgrößen sind Richtwerte. Dicht beschriebene Textseiten kommen in Graustufen auf etwa
+  100–200 KB, weil die Auflösung für die Lesbarkeit nicht unter 150 dpi sinkt. Für 80 oder 40 KB
+  eignet sich **Schwarz-Weiß** (typisch 25–60 KB pro Textseite), das Fotos und Logos aber grob macht.
+
+### Warum ein importiertes PDF etwas größer werden kann
+
+Ohne Kompression bleibt der Inhalt unverändert, es kommen aber Textebene, Stempel und Metadaten hinzu.
+Bei kleinen Dateien fällt das auf (Beispiel: eine eingescannte Karte, 67 KB → 80 KB). Um den Aufschlag
+klein zu halten, nutzt die unsichtbare Textebene eine von ScanArchiv erzeugte **Schrift ohne
+Zeichenformen**, wie sie auch OCRmyPDF verwendet: Suchen, Markieren und Kopieren funktionieren
+genauso, es wird aber kaum Schrift eingebettet (etwa 1–2 KB statt 15 KB). Die ⓘ-Info zeigt
+Original- und Archivgröße samt Differenz.
+
+## Was im PDF gespeichert wird
+
+Das PDF ist maßgeblich; der Suchindex ist nur eine Kopie. **„Index neu aufbauen“** liest alle PDFs neu ein
+und stellt alles vollständig wieder her.
+
+- **Standardfelder** (auch für Spotlight und Vorschau.app): Titel, Beschreibung (Betreff), Nummer
+  (Stichwörter), Programm, Archivierungszeitpunkt (Erstelldatum).
+- **ScanArchiv-Daten** als JSON in einer unsichtbaren, nicht druckbaren Anmerkung auf Seite 1:
+  - Dokumentdatum und Herkunft (Text, Apple Intelligence, Tagesdatum, von Hand),
+  - Herkunft von Titel/Beschreibung (Apple Intelligence oder von Hand) mit Zeitpunkt,
+  - Quelle (Scan/PDF/Bild), Originaldateiname, -größe und Prüfsumme,
+  - Scanparameter (Scanner, dpi, Farbe),
+  - Kompression (Vorgabe, Farbmodus, angewendet oder Original behalten, Größe vorher/nachher),
+  - je Seite die Herkunft des Textes: *vorhandener Text* (schon im Original, keine OCR nötig), *per OCR erkannt*,
+    *ohne Text* (OCR fand nichts) oder bei Altbestand *Herkunft unbekannt*; dazu OCR-Engine, Sprachen und Zeitpunkt,
+  - Problem-Vermerke.
+  - Programmversion bei der Erstellung und bei der letzten Änderung, z. B. „ScanArchiv 1.1 (Build 202609191013)“.
+    Daran lässt sich später erkennen, welche Dokumente mit welcher OCR- bzw. Kompressionslogik entstanden sind.
+- Im Archiv zeigen der **ⓘ-Button** über der Vorschau und der **Tooltip über der Spalte „Datei“** diese Angaben an.
+- Dokumente aus älteren Versionen bekommen die Daten beim nächsten Einlesen einmalig ergänzt; die
+  frühere Zusatzdatei `.scanarchiv-issues.json` wird dabei übernommen und entfernt. Als Erstellversion steht dort
+  „ScanArchiv vor 1.0“.
+
+Die aktuelle Programmversion steht in den Einstellungen unter „Über“. `build.sh` vergibt bei jedem Build eine
+eindeutige Build-Nummer (Zeitstempel).
+
 ## Einstellungen (⌘,)
 
-Archivordner (Standard `~/Documents/ScanArchiv`), Auflösung, Farbe/Graustufen, Rückseiten drehen, JPEG-Qualität.
+Archivordner, Eingangsordner, Scan-Auflösung und -Farbe, Rückseiten drehen, Kompression (siehe oben).
 
 ## Archivordner
 
@@ -101,7 +153,6 @@ Archivordner (Standard `~/Documents/ScanArchiv`), Auflösung, Farbe/Graustufen, 
 | --- | --- |
 | `JJJJ-MM-TT_NNNNNN_Titel.pdf` | die Dokumente (Titel und Beschreibung auch in den PDF-Metadaten) |
 | `counter.json` | letzte vergebene Nummer |
-| `.scanarchiv-issues.json` | Problem-Vermerke je Dokumentnummer |
 | `.scanarchiv-index.sqlite` | Suchindex (SQLite FTS5), jederzeit per „Index neu aufbauen“ wiederherstellbar |
 
 Die nächste Nummer ist immer größer als der Zählerstand **und** größer als jede Nummer, die schon in

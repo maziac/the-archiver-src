@@ -18,15 +18,31 @@ public enum PDFBuilderError: LocalizedError {
 
 /// Eine fertig ausgerichtete Seite mit ihrem OCR-Ergebnis.
 public struct PDFPageInput {
-    public var image: CGImage
+    public enum Content {
+        /// Seitenbild, wird unverändert gezeichnet (vorher mit `PageCompressor` kodieren);
+        /// dpi nil = die Auflösung aus `build(dpi:)`
+        case image(CGImage, dpi: Double?)
+        /// Seite eines vorhandenen PDFs, unverändert als Vektor übernommen (eigener Text bleibt erhalten)
+        case vector(CGPDFPage)
+    }
+
+    public var content: Content
+    /// unsichtbare Textebene (nur für Bildseiten)
     public var lines: [OCRLine]
-    /// Auflösung dieses Bildes; nil = die Auflösung aus `build(dpi:)`
-    public var dpi: Double?
 
     public init(image: CGImage, lines: [OCRLine], dpi: Double? = nil) {
-        self.image = image
+        content = .image(image, dpi: dpi)
         self.lines = lines
-        self.dpi = dpi
+    }
+
+    public init(encoded: EncodedImage, lines: [OCRLine]) {
+        content = .image(encoded.image, dpi: encoded.dpi)
+        self.lines = lines
+    }
+
+    public init(vectorPage: CGPDFPage) {
+        content = .vector(vectorPage)
+        lines = []
     }
 }
 
@@ -39,9 +55,10 @@ public enum PDFBuilder {
         return "Nr. \(Archive.formatNumber(number)) · \(f.string(from: date))"
     }
 
-    /// Baut ein durchsuchbares PDF: Scanbild (JPEG) + unsichtbare OCR-Textebene je Seite,
-    /// sichtbarer Nummernstempel auf Seite 1 und Metadaten (Titel, Beschreibung, Keywords).
-    public static func build(pages: [PDFPageInput], number: Int, date: Date, dpi: Double, jpegQuality: Double = 0.7,
+    /// Baut ein durchsuchbares PDF: Seitenbild bzw. Vektor-Seite + unsichtbare OCR-Textebene je Seite,
+    /// sichtbarer Nummernstempel auf Seite 1 und Standard-Metadaten (Titel, Beschreibung, Keywords).
+    /// Die Bilder werden so eingebettet, wie sie übergeben werden (Kompression vorher per `PageCompressor`).
+    public static func build(pages: [PDFPageInput], number: Int, date: Date, dpi: Double,
                              title: String = "", summary: String = "") throws -> Data {
         let data = NSMutableData()
         let numberText = Archive.formatNumber(number)
@@ -58,13 +75,31 @@ public enum PDFBuilder {
         }
 
         for (index, page) in pages.enumerated() {
-            let pageDPI = page.dpi ?? dpi
-            let size = CGSize(width: Double(page.image.width) / pageDPI * 72, height: Double(page.image.height) / pageDPI * 72)
+            let size: CGSize
+            switch page.content {
+            case let .image(image, pageDPI):
+                let d = pageDPI ?? dpi
+                size = CGSize(width: Double(image.width) / d * 72, height: Double(image.height) / d * 72)
+            case let .vector(pdfPage):
+                let box = pdfPage.getBoxRect(.cropBox)
+                size = Int(pdfPage.rotationAngle) % 180 == 0 ? box.size : CGSize(width: box.height, height: box.width)
+            }
             var mediaBox = CGRect(origin: .zero, size: size)
             let pageInfo = [kCGPDFContextMediaBox: Data(bytes: &mediaBox, count: MemoryLayout<CGRect>.size)] as CFDictionary
             ctx.beginPDFPage(pageInfo)
 
-            ctx.draw(try jpegImage(page.image, quality: jpegQuality), in: mediaBox)
+            switch page.content {
+            case let .image(image, _):
+                ctx.draw(image, in: mediaBox)
+            case let .vector(pdfPage):
+                ctx.saveGState()
+                let box = pdfPage.getBoxRect(.cropBox)
+                let (toPage, _) = PDFStamper.displayToPage(rotation: Int(pdfPage.rotationAngle), box: box)
+                ctx.concatenate(toPage.inverted())
+                ctx.clip(to: box)
+                ctx.drawPDFPage(pdfPage)
+                ctx.restoreGState()
+            }
             drawInvisibleText(page.lines, in: ctx, pageSize: size)
             if index == 0 {
                 drawStamp(stampText(number: number, date: date), in: ctx, pageSize: size)
@@ -76,21 +111,6 @@ public enum PDFBuilder {
         return data as Data
     }
 
-    /// Re-kodiert das Bild als JPEG, damit Quartz die DCT-Daten direkt ins PDF übernimmt (kleine Dateien).
-    static func jpegImage(_ image: CGImage, quality: Double) throws -> CGImage {
-        let data = NSMutableData()
-        guard let dest = CGImageDestinationCreateWithData(data as CFMutableData, UTType.jpeg.identifier as CFString, 1, nil) else {
-            throw PDFBuilderError.jpegEncodingFailed
-        }
-        CGImageDestinationAddImage(dest, image, [kCGImageDestinationLossyCompressionQuality: quality] as CFDictionary)
-        guard CGImageDestinationFinalize(dest),
-              let provider = CGDataProvider(data: data as CFData),
-              let jpeg = CGImage(jpegDataProviderSource: provider, decode: nil, shouldInterpolate: true, intent: .defaultIntent) else {
-            throw PDFBuilderError.jpegEncodingFailed
-        }
-        return jpeg
-    }
-
     static func drawInvisibleText(_ lines: [OCRLine], in ctx: CGContext, pageSize: CGSize) {
         ctx.saveGState()
         ctx.setTextDrawingMode(.invisible)
@@ -98,18 +118,33 @@ public enum PDFBuilder {
             let rect = CGRect(x: line.box.minX * pageSize.width, y: line.box.minY * pageSize.height,
                               width: line.box.width * pageSize.width, height: line.box.height * pageSize.height)
             guard rect.width > 0, rect.height > 0 else { continue }
-            let font = CTFontCreateWithName("Helvetica" as CFString, rect.height * 0.85, nil)
-            let ctLine = CTLineCreateWithAttributedString(NSAttributedString(string: line.text, attributes: [.init(kCTFontAttributeName as String): font]))
-            let textWidth = CTLineGetTypographicBounds(ctLine, nil, nil, nil)
-            guard textWidth > 0 else { continue }
-            // Text horizontal auf die erkannte Zeilenbreite strecken, damit Markieren im Viewer passt.
-            ctx.textMatrix = CGAffineTransform(scaleX: rect.width / textWidth, y: 1)
-            ctx.textPosition = CGPoint(x: rect.minX, y: rect.minY + rect.height * 0.15)
-            CTLineDraw(ctLine, ctx)
+            drawInvisible(line.text, in: rect, ctx: ctx)
         }
         ctx.restoreGState()
     }
 
+    /// Unsichtbarer Text in der Schrift ohne Zeichenformen, horizontal auf `rect` gestreckt
+    /// (damit Markieren im Viewer zur sichtbaren Schrift passt). Aufrufer setzt den Zeichenmodus.
+    private static func drawInvisible(_ text: String, in rect: CGRect, ctx: CGContext) {
+        func line(size: CGFloat) -> (CTLine, CGFloat) {
+            let l = CTLineCreateWithAttributedString(NSAttributedString(string: text, attributes: [
+                .init(kCTFontAttributeName as String): GlyphlessFont.font(size: size)]))
+            return (l, CGFloat(CTLineGetTypographicBounds(l, nil, nil, nil)))
+        }
+        var (ctLine, textWidth) = line(size: rect.height * 0.85)
+        guard textWidth > 0 else { return }
+        // Zu schmale Zeile: Schrift verkleinern statt stauchen – gestauchter Text wird von PDFKit
+        // sonst mit Leerzeichen zwischen den Buchstaben ausgelesen („E U R O …“).
+        if rect.width < textWidth * 0.95 {
+            (ctLine, textWidth) = line(size: rect.height * 0.85 * rect.width / textWidth)
+            guard textWidth > 0 else { return }
+        }
+        ctx.textMatrix = CGAffineTransform(scaleX: rect.width / textWidth, y: 1)
+        ctx.textPosition = CGPoint(x: rect.minX, y: rect.minY + rect.height * 0.15)
+        CTLineDraw(ctLine, ctx)
+    }
+
+    /// Roter Nummernstempel (echter Text, damit die Nummer im PDF durchsuchbar ist).
     static func drawStamp(_ text: String, in ctx: CGContext, pageSize: CGSize) {
         let font = CTFontCreateWithName("Helvetica-Bold" as CFString, 9, nil)
         // Rot, damit er sich vom schwarz-weißen Scan abhebt

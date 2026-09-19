@@ -7,10 +7,14 @@ import ScanArchivCore
 enum SettingsKey {
     static let archivePath = "archivePath"
     static let dpi = "dpi"
-    static let color = "color"
     static let rotateBacks = "rotateBacks"
-    static let jpegQuality = "jpegQuality"
     static let inboxPath = "inboxPath"
+    // Kompression (Werte: rawValue von SizePreset / ColorMode)
+    static let scanPreset = "scanPreset"
+    static let scanColorMode = "scanColorMode"
+    static let pdfPreset = "pdfPreset"
+    static let imagePreset = "imagePreset"
+    static let importColorMode = "importColorMode"
 
     static var defaultArchivePath: String {
         FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
@@ -27,10 +31,25 @@ enum SettingsKey {
             archivePath: defaultArchivePath,
             inboxPath: defaultInboxPath,
             dpi: 300,
-            color: false,
             rotateBacks: false,
-            jpegQuality: 0.7,
+            scanPreset: SizePreset.kb150.rawValue,
+            scanColorMode: ColorMode.gray.rawValue,
+            pdfPreset: SizePreset.original.rawValue,
+            imagePreset: SizePreset.kb150.rawValue,
+            importColorMode: ColorMode.original.rawValue,
         ])
+    }
+
+    static func preset(_ key: String) -> SizePreset {
+        SizePreset(rawValue: UserDefaults.standard.string(forKey: key) ?? "") ?? .original
+    }
+
+    static func colorMode(_ key: String) -> ColorMode {
+        ColorMode(rawValue: UserDefaults.standard.string(forKey: key) ?? "") ?? .original
+    }
+
+    static var importOptions: ImportOptions {
+        ImportOptions(pdfPreset: preset(pdfPreset), imagePreset: preset(imagePreset), colorMode: colorMode(importColorMode))
     }
 }
 
@@ -44,8 +63,6 @@ enum AppTab: Hashable {
 final class AppModel {
     private(set) var archive: Archive?
     private(set) var index: SearchIndex?
-    /// Probleme je Dokumentnummer (dauerhaft im Archivordner)
-    private(set) var issueStore: IssueStore?
     var selectedTab: AppTab = .scan
     private(set) var error: String?
     /// Wird nach jedem gespeicherten Dokument / Reindex erhöht, damit die Suche neu lädt.
@@ -65,21 +82,35 @@ final class AppModel {
             let index = try SearchIndex(url: folder.appendingPathComponent(SearchIndex.fileName))
             self.archive = archive
             self.index = index
-            issueStore = IssueStore(folder: folder)
             error = nil
             reindex(full: false)
         } catch {
             self.archive = nil
             self.index = nil
-            issueStore = nil
             self.error = error.localizedDescription
         }
     }
 
     func reindex(full: Bool) {
-        guard let index, let archive, let issueStore else { return }
+        guard let index, let archive else { return }
         Task.detached(priority: .utility) {
-            try? index.sync(folder: archive.folder, full: full) { issueStore.issues(for: $0) }
+            // Altbestand ohne Metadaten wird dabei einmalig ergänzt (inkl. alter Problem-Vermerke)
+            let legacy = LegacyIssues.load(folder: archive.folder)
+            // Einmalig: früher falsch beschrifteten Altbestand korrigieren (Erstellversion, Textherkunft)
+            var repaired = false
+            let repairKey = "legacyRepairV1"
+            if !UserDefaults.standard.bool(forKey: repairKey) {
+                let files = (try? FileManager.default.contentsOfDirectory(at: archive.folder, includingPropertiesForKeys: nil)) ?? []
+                for url in files where url.pathExtension.lowercased() == "pdf" {
+                    if (try? archive.repairLegacyMetadata(url: url)) == true { repaired = true }
+                }
+                UserDefaults.standard.set(true, forKey: repairKey)
+            }
+            try? index.sync(folder: archive.folder, full: full || repaired) { url in
+                let number = Archive.parse(fileName: url.lastPathComponent)?.number ?? 0
+                try? archive.migrateLegacy(url: url, issues: legacy[number] ?? [])
+            }
+            if !legacy.isEmpty { LegacyIssues.remove(folder: archive.folder) }
             await MainActor.run { self.revision += 1 }
         }
     }
@@ -88,36 +119,46 @@ final class AppModel {
 
     // MARK: Titel/Beschreibung/Datum bearbeiten
 
-    /// Schreibt die Angaben ins PDF, benennt die Datei um und aktualisiert den Index.
-    /// Erledigte Probleme verschwinden: Titel gesetzt → `.noSuggestion`, Datum bestätigt/geändert → `.noDate`.
-    func updateDocument(path: String, date: Date, title: String, summary: String, dateConfirmed: Bool) async throws {
+    /// Schreibt die Angaben ins PDF (inkl. ScanArchiv-Metadaten), benennt die Datei um und aktualisiert den Index.
+    /// - titleSource: neue Herkunft von Titel/Beschreibung (nil = unverändert)
+    /// - dateSource: neue Herkunft des Datums (nil = unverändert)
+    /// Erledigte Probleme verschwinden: Titel gesetzt → `.noSuggestion`, Datum bestätigt → `.noDate`.
+    func updateDocument(path: String, date: Date, title: String, summary: String,
+                        titleSource: DocumentMetadata.TitleSource?, dateSource: DocumentMetadata.DateSource?) async throws {
         guard let archive, let index else { return }
         let title = title.trimmingCharacters(in: .whitespacesAndNewlines)
         let summary = summary.trimmingCharacters(in: .whitespacesAndNewlines)
         try await Task.detached {
-            let newURL = try archive.updateMetadata(url: URL(fileURLWithPath: path), date: date, title: title, summary: summary)
-            try index.update(oldPath: path, newURL: newURL, date: date, title: title, summary: summary)
-        }.value
-        if let number = Archive.parse(fileName: URL(fileURLWithPath: path).lastPathComponent)?.number, let issueStore {
-            let remaining = try issueStore.remove(for: number) { issue in
-                switch issue {
-                case .noSuggestion: return !title.isEmpty
-                case .noDate: return dateConfirmed
-                case .noText: return false
+            let result = try archive.updateMetadata(url: URL(fileURLWithPath: path), date: date, title: title, summary: summary) { meta in
+                if let titleSource {
+                    meta.titleSource = title.isEmpty ? .none : titleSource
+                    meta.titleUpdated = Date()
+                }
+                if let dateSource { meta.dateSource = dateSource }
+                meta.issues.removeAll { issue in
+                    switch issue {
+                    case .noSuggestion: return !title.isEmpty
+                    case .noDate: return dateSource != nil && dateSource != .today
+                    case .noText: return false
+                    }
                 }
             }
-            try index.setIssues(remaining, number: number)
-        }
+            try index.update(oldPath: path, newURL: result.url, date: date, title: title, summary: summary, meta: result.meta)
+        }.value
         revision += 1
     }
 
-    /// „Als geprüft markieren“: alle Probleme der Dokumente entfernen.
-    func markReviewed(_ records: [DocumentRecord]) throws {
-        guard let index, let issueStore else { return }
-        for record in records where record.number > 0 {
-            try issueStore.set([], for: record.number)
-            try index.setIssues([], number: record.number)
-        }
+    /// „Als geprüft markieren“: alle Probleme der Dokumente entfernen (im PDF und im Index).
+    func markReviewed(_ records: [DocumentRecord]) async throws {
+        guard let archive, let index else { return }
+        try await Task.detached {
+            for record in records where record.number > 0 {
+                let result = try archive.updateMetadata(url: record.url, date: record.date, title: record.title,
+                                                        summary: record.summary) { $0.issues = [] }
+                try index.update(oldPath: record.path, newURL: result.url, date: record.date, title: record.title,
+                                 summary: record.summary, meta: result.meta)
+            }
+        }.value
         revision += 1
     }
 
@@ -190,7 +231,7 @@ final class AppModel {
                     let fileName = URL(fileURLWithPath: record.path).lastPathComponent
                     let date = suggestion.date ?? Archive.parse(fileName: fileName)?.date ?? Date()
                     try await updateDocument(path: record.path, date: date, title: suggestion.title, summary: suggestion.summary,
-                                             dateConfirmed: suggestion.date != nil)
+                                             titleSource: .ai, dateSource: suggestion.date != nil ? .ai : nil)
                 } catch {
                     titleBatch?.failed += 1
                 }

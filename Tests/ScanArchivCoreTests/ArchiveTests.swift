@@ -68,7 +68,7 @@ struct ArchiveTests {
         let sizeBefore = try Data(contentsOf: saved.url).count
         let newDate = DateComponents(calendar: Calendar(identifier: .gregorian), year: 2026, month: 8, day: 1, hour: 12).date!
 
-        let newURL = try archive.updateMetadata(url: saved.url, date: newDate, title: "Stromrechnung SWM", summary: "Rechnung über Strom.")
+        let newURL = try archive.updateMetadata(url: saved.url, date: newDate, title: "Stromrechnung SWM", summary: "Rechnung über Strom.").url
         #expect(newURL.lastPathComponent == "2026-08-01_000001_Stromrechnung-SWM.pdf")
         #expect(!FileManager.default.fileExists(atPath: saved.url.path))
 

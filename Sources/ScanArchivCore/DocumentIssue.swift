@@ -39,56 +39,18 @@ public enum DocumentIssue: Codable, Hashable, Sendable {
     }
 }
 
-/// Dauerhafte Ablage der Probleme je Dokumentnummer in `.scanarchiv-issues.json` im Archivordner.
-/// (Der Suchindex ist nur ein Cache und wird daraus befüllt.)
-public final class IssueStore: @unchecked Sendable {
+/// Liest die Problem-Vermerke aus der früheren Zusatzdatei `.scanarchiv-issues.json` (vor Version 1.0).
+/// Sie werden bei der Migration ins PDF übernommen; danach wird die Datei gelöscht.
+public enum LegacyIssues {
     public static let fileName = ".scanarchiv-issues.json"
-    private let url: URL
-    private let lock = NSLock()
-    private var entries: [Int: [DocumentIssue]]
 
-    public init(folder: URL) {
-        url = folder.appendingPathComponent(IssueStore.fileName)
-        if let data = try? Data(contentsOf: url),
-           let decoded = try? JSONDecoder().decode([String: [DocumentIssue]].self, from: data) {
-            entries = Dictionary(uniqueKeysWithValues: decoded.compactMap { key, value in Int(key).map { ($0, value) } })
-        } else {
-            entries = [:]
-        }
+    public static func load(folder: URL) -> [Int: [DocumentIssue]] {
+        guard let data = try? Data(contentsOf: folder.appendingPathComponent(fileName)),
+              let decoded = try? JSONDecoder().decode([String: [DocumentIssue]].self, from: data) else { return [:] }
+        return Dictionary(uniqueKeysWithValues: decoded.compactMap { key, value in Int(key).map { ($0, value) } })
     }
 
-    public func issues(for number: Int) -> [DocumentIssue] {
-        lock.lock(); defer { lock.unlock() }
-        return entries[number] ?? []
-    }
-
-    public var all: [Int: [DocumentIssue]] {
-        lock.lock(); defer { lock.unlock() }
-        return entries
-    }
-
-    /// Setzt die Probleme eines Dokuments (leer = keine Probleme).
-    public func set(_ issues: [DocumentIssue], for number: Int) throws {
-        lock.lock(); defer { lock.unlock() }
-        guard number > 0 else { return }
-        entries[number] = issues.isEmpty ? nil : issues
-        try persist()
-    }
-
-    /// Entfernt die Probleme, auf die `shouldRemove` zutrifft; liefert die verbleibenden.
-    @discardableResult
-    public func remove(for number: Int, where shouldRemove: (DocumentIssue) -> Bool) throws -> [DocumentIssue] {
-        lock.lock(); defer { lock.unlock() }
-        let remaining = (entries[number] ?? []).filter { !shouldRemove($0) }
-        entries[number] = remaining.isEmpty ? nil : remaining
-        try persist()
-        return remaining
-    }
-
-    private func persist() throws {
-        let encoded = Dictionary(uniqueKeysWithValues: entries.map { (String($0.key), $0.value) })
-        let encoder = JSONEncoder()
-        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-        try encoder.encode(encoded).write(to: url, options: .atomic)
+    public static func remove(folder: URL) {
+        try? FileManager.default.removeItem(at: folder.appendingPathComponent(fileName))
     }
 }

@@ -1,5 +1,6 @@
 import Observation
 import PDFKit
+import ScanArchivCore
 import SwiftUI
 
 /// Vorschau eines Archiv-PDFs mit Suche: alle Treffer markiert, aktueller Treffer hervorgehoben,
@@ -16,6 +17,8 @@ final class PDFPreviewModel {
 
     private(set) var url: URL?
     private(set) var document: PDFDocument?
+    /// ScanArchiv-Metadaten des angezeigten Dokuments
+    private(set) var meta: DocumentMetadata?
     var query = "" { didSet { if query != oldValue { search() } } }
     private(set) var hits: [Hit] = []
     var currentHit: Int? { didSet { if currentHit != oldValue { navigationToken += 1 } } }
@@ -26,6 +29,7 @@ final class PDFPreviewModel {
         if url != self.url {
             self.url = url
             document = url.flatMap { PDFDocument(url: $0) }
+            meta = document.flatMap(PDFMetadata.read)
             let queryChanged = query != self.query
             self.query = query  // löst bei Änderung die Suche aus
             if !queryChanged { search() }
@@ -89,6 +93,7 @@ final class PDFPreviewModel {
 struct PDFPreviewPane: View {
     @Bindable var preview: PDFPreviewModel
     @FocusState private var searchFocused: Bool
+    @State private var showInfo = false
 
     // Der Aufbau bleibt immer gleich (auch ohne Dokument), sonst berechnet die umgebende
     // Split-Ansicht beim ersten Anzeigen eines PDFs die Spaltenbreiten neu.
@@ -139,6 +144,11 @@ struct PDFPreviewPane: View {
                 .keyboardShortcut("g", modifiers: .command)
                 .help("Nächster Treffer (⌘G oder ⏎)")
                 .disabled(preview.hits.isEmpty)
+            Button { showInfo.toggle() } label: { Image(systemName: "info.circle") }
+                .help("Informationen zum Dokument")
+                .popover(isPresented: $showInfo, arrowEdge: .bottom) {
+                    DocumentInfoView(meta: preview.meta, url: preview.url, pageCount: preview.document?.pageCount ?? 0)
+                }
             if let url = preview.url {
                 Button { NSWorkspace.shared.open(url) } label: { Image(systemName: "arrow.up.forward.app") }
                     .help("In Vorschau.app öffnen")
@@ -215,5 +225,38 @@ private struct PDFKitView: NSViewRepresentable {
         } else {
             view.clearSelection()
         }
+    }
+}
+
+/// Alles, was ScanArchiv im PDF über das Dokument gespeichert hat (gleiche Angaben wie der Tooltip in der Liste).
+private struct DocumentInfoView: View {
+    let meta: DocumentMetadata?
+    let url: URL?
+    let pageCount: Int
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text(meta.map { "Nr. \(Archive.formatNumber($0.number))" } ?? "Dokument").font(.headline)
+            if meta == nil {
+                Text("Keine ScanArchiv-Informationen (fremdes PDF).").foregroundStyle(.secondary)
+            }
+            Grid(alignment: .leadingFirstTextBaseline, horizontalSpacing: 12, verticalSpacing: 6) {
+                ForEach(DocumentInfo.lines(meta: meta, fileSize: url.flatMap(DocumentInfo.fileSize), pageCount: pageCount),
+                        id: \.label) { line in
+                    GridRow {
+                        Text(line.label).foregroundStyle(.secondary).gridColumnAlignment(.trailing)
+                        Text(line.value).fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+            }
+            if let issues = meta?.issues, !issues.isEmpty {
+                Divider()
+                Text("Zu prüfen").font(.subheadline.weight(.semibold)).foregroundStyle(.red)
+                ForEach(issues, id: \.self) { Label($0.message, systemImage: "exclamationmark.triangle").foregroundStyle(.red) }
+            }
+        }
+        .textSelection(.enabled)
+        .padding(16)
+        .frame(width: 420, alignment: .leading)
     }
 }

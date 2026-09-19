@@ -82,7 +82,7 @@ struct InboxView: View {
                     .help("Die laufende Datei wird noch fertig verarbeitet.")
             }
             Button("Erledigte ausblenden") { inbox.clearFinished() }
-                .disabled(inbox.doneCount + inbox.failedCount == 0)
+                .disabled(inbox.doneCount + inbox.failedCount + inbox.duplicateCount == 0)
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
@@ -90,6 +90,7 @@ struct InboxView: View {
 
     private var statusLine: String {
         var parts = ["\(inbox.waitingCount) wartend", "\(inbox.processingCount) in Arbeit", "\(inbox.doneCount) fertig"]
+        if inbox.duplicateCount > 0 { parts.append("\(inbox.duplicateCount) Duplikat(e)") }
         if inbox.failedCount > 0 { parts.append("\(inbox.failedCount) Fehler") }
         if inbox.isPaused { parts.append("pausiert") }
         return parts.joined(separator: " · ")
@@ -115,8 +116,11 @@ struct InboxView: View {
         .contextMenu(forSelectionType: InboxService.Item.ID.self) { ids in
             let selected = inbox.items.filter { ids.contains($0.id) }
             let archived = selected.compactMap { item -> URL? in
-                if case let .done(result) = item.state { return result.url }
-                return nil
+                switch item.state {
+                case let .done(result): return result.url
+                case let .duplicate(_, existing): return existing
+                default: return nil
+                }
             }
             if !archived.isEmpty {
                 Button("Öffnen") { archived.forEach { NSWorkspace.shared.open($0) } }
@@ -131,7 +135,11 @@ struct InboxView: View {
             }
         } primaryAction: { ids in
             for item in inbox.items where ids.contains(item.id) {
-                if case let .done(result) = item.state { NSWorkspace.shared.open(result.url) }
+                switch item.state {
+                case let .done(result): NSWorkspace.shared.open(result.url)
+                case let .duplicate(_, existing): NSWorkspace.shared.open(existing)
+                default: break
+                }
             }
         }
         .overlay {
@@ -203,6 +211,8 @@ private struct InboxRow: View {
             }
         case .failed:
             Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.red)
+        case .duplicate:
+            Image(systemName: "doc.on.doc.fill").foregroundStyle(.orange)
         }
     }
 
@@ -223,6 +233,9 @@ private struct InboxRow: View {
             }
         case let .failed(message):
             Text("\(message) → Ordner „Fehler“").font(.caption).foregroundStyle(.red).lineLimit(2)
+        case let .duplicate(number, _):
+            Text("Duplikat von Nr. \(Archive.formatNumber(number)) – nicht erneut archiviert → Ordner „Duplikate“")
+                .font(.caption).foregroundStyle(.orange).lineLimit(2)
         }
     }
 
@@ -235,6 +248,8 @@ private struct InboxRow: View {
             return lines.joined(separator: "\n")
         case let .failed(message):
             return message
+        case let .duplicate(_, existing):
+            return "Bereits archiviert als \(existing.lastPathComponent)\nDoppelklick öffnet das vorhandene Dokument."
         default:
             return item.fileName
         }
