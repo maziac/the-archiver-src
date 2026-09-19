@@ -9,6 +9,10 @@ enum SettingsKey {
     static let dpi = "dpi"
     static let rotateBacks = "rotateBacks"
     static let autoOrient = "autoOrient"
+    /// Höhe der Seitenminiaturen in Scan-Vorschau und „Seiten bearbeiten“
+    static let pageThumbHeight = "pageThumbHeight"
+    static let defaultPageThumbHeight = 560.0
+    static let pageThumbHeightRange = 200.0...1200.0
     static let singleSource = "singleSource"
     static let inboxPath = "inboxPath"
     // Kompression (Werte: rawValue von SizePreset / ColorMode)
@@ -122,6 +126,20 @@ final class AppModel {
                 try? archive.migrateLegacy(url: url, issues: legacy[number] ?? [])
             }
             if !legacy.isEmpty { LegacyIssues.remove(folder: archive.folder) }
+            // Einmalig je Archiv: leere Seiten waren früher als „kein Text erkannt“ vermerkt
+            let blankKey = "blankPagesV2:" + archive.folder.path  // V2: breiterer Rand (Lochung, Maschinencodes)
+            if !UserDefaults.standard.bool(forKey: blankKey) {
+                let flagged = ((try? index.search("", onlyIssues: true, limit: 1_000_000)) ?? []).filter { record in
+                    record.issues.contains { if case .noText = $0 { true } else { false } }
+                }
+                for record in flagged {
+                    guard let result = try? archive.recheckBlankPages(url: record.url, date: record.date,
+                                                                      title: record.title, summary: record.summary) else { continue }
+                    try? index.update(oldPath: record.path, newURL: result.url, date: record.date, title: record.title,
+                                      summary: record.summary, meta: result.meta)
+                }
+                UserDefaults.standard.set(true, forKey: blankKey)
+            }
             await MainActor.run { self.revision += 1 }
         }
     }
@@ -176,6 +194,18 @@ final class AppModel {
     /// „Seiten bearbeiten“: umsortieren/drehen, danach Volltext und Metadaten im Index erneuern.
     func rearrangePages(_ record: DocumentRecord, order: [Int], rotations: [Int]) async throws {
         guard let archive, let index else { return }
+        // nichts geändert: bestehende Reihenfolge bestätigen (nur der Reihenfolge-Vermerk verschwindet)
+        if order == Array(order.indices), rotations.allSatisfy({ $0 % 360 == 0 }) {
+            guard record.issues.contains(where: \.isPageOrder) else { return }
+            try await Task.detached {
+                let result = try archive.updateMetadata(url: record.url, date: record.date, title: record.title,
+                                                        summary: record.summary) { $0.issues.removeAll(where: \.isPageOrder) }
+                try index.update(oldPath: record.path, newURL: result.url, date: record.date, title: record.title,
+                                 summary: record.summary, meta: result.meta)
+            }.value
+            revision += 1
+            return
+        }
         try await Task.detached {
             let result = try archive.rearrange(url: record.url, order: order, rotations: rotations,
                                                title: record.title, summary: record.summary)

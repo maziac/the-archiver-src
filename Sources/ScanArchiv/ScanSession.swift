@@ -26,7 +26,7 @@ struct ScannedPage: Identifiable {
     init(url: URL, kind: Kind, rotation: Int) {
         self.url = url
         self.kind = kind
-        baseThumbnail = ImageTools.thumbnail(url)
+        baseThumbnail = ImageTools.thumbnail(url, maxPixel: 1400)  // groß genug für lesbare Seitenzahlen
         self.rotation = 0
         thumbnail = NSImage()
         setRotation(rotation)
@@ -505,12 +505,18 @@ final class ScanSession {
                 for (i, page) in snapshot.enumerated() {
                     let lines = ocrCache[page.id]?.lines ?? []
                     let text = lines.map(\.text).joined(separator: "\n")
-                    let hasText = DocumentIssue.hasText(text)
-                    if !hasText { emptyPages.append(i + 1) }
-                    textSources.append(hasText ? .ocr : .none)
-                    texts.append(text)
                     phase = .processing("Seite \(i + 1) von \(snapshot.count) wird komprimiert …")
                     let image = try await Self.loadImage(url: page.url, rotation: page.rotation)
+                    // ohne Text: leere Seite (kein Problem) oder Inhalt ohne erkennbaren Text (Problem)
+                    if DocumentIssue.hasText(text) {
+                        textSources.append(.ocr)
+                    } else if await Task.detached(operation: { BlankPage.isBlank(image) }).value {
+                        textSources.append(.blank)
+                    } else {
+                        textSources.append(.none)
+                        emptyPages.append(i + 1)
+                    }
+                    texts.append(text)
                     let size = CGSize(width: Double(image.width) / dpi * 72, height: Double(image.height) / dpi * 72)
                     let encoded = await Task.detached {
                         PageCompressor.encode(image, pageSize: size, preset: preset, color: colorMode)

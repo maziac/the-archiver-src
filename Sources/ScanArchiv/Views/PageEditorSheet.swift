@@ -22,6 +22,8 @@ struct PageEditorSheet: View {
     @State private var thumbnails: [Int: CGImage] = [:]
     @State private var saving = false
     @State private var error: String?
+    /// Höhe der Miniaturen (Regler, gemerkt – gilt auch für die Scan-Vorschau)
+    @AppStorage(SettingsKey.pageThumbHeight) private var thumbHeight = SettingsKey.defaultPageThumbHeight
 
     private var changed: Bool {
         items.map(\.id) != Array(items.indices) || items.contains { $0.rotation % 360 != 0 }
@@ -51,9 +53,10 @@ struct PageEditorSheet: View {
             .padding(16)
             Divider()
             ScrollView {
-                LazyVGrid(columns: [GridItem(.adaptive(minimum: 150), spacing: 16)], spacing: 16) {
+                LazyVGrid(columns: [GridItem(.adaptive(minimum: thumbHeight * 0.72), spacing: 16)], spacing: 16) {
                     ForEach(Array(items.enumerated()), id: \.element.id) { position, item in
-                        EditorThumb(image: thumbnails[item.id], rotation: item.rotation, label: label(position: position, item: item)) { id in
+                        EditorThumb(image: thumbnails[item.id], rotation: item.rotation, height: thumbHeight,
+                                    label: label(position: position, item: item)) { id in
                             withAnimation { move(id, to: item.id) }
                         }
                         .onTapGesture { rotate(item, by: 180) }
@@ -82,6 +85,7 @@ struct PageEditorSheet: View {
                 }
                 Button("Zurücksetzen") { withAnimation { items = items.indices.map { Item(id: $0) } } }
                     .disabled(!changed)
+                PageSizeSlider(height: $thumbHeight)
                 if let error {
                     Text(error).font(.caption).foregroundStyle(.red).lineLimit(2)
                 }
@@ -91,11 +95,12 @@ struct PageEditorSheet: View {
                     .keyboardShortcut(.cancelAction)
                 Button("Sichern") { save() }
                     .keyboardShortcut(.defaultAction)
-                    .disabled(!changed || saving)
+                    .disabled(saving)
+                    .help(changed ? "Neue Reihenfolge/Drehung speichern" : "Reihenfolge bestätigen – der Reihenfolge-Vermerk verschwindet")
             }
             .padding(16)
         }
-        .frame(minWidth: 720, idealWidth: 860, minHeight: 560, idealHeight: 680)
+        .frame(minWidth: 820, idealWidth: 1200, minHeight: 640, idealHeight: 900)
         .task { await load() }
     }
 
@@ -124,7 +129,8 @@ struct PageEditorSheet: View {
         for i in 0..<document.pageCount {
             guard let page = document.page(at: i) else { continue }
             // Miniatur in der angezeigten Lage (Seitendrehung eingerechnet)
-            let image = page.thumbnail(of: CGSize(width: 300, height: 300), for: .cropBox)
+            // groß genug, dass sich auch kleine Seitenzahlen lesen lassen
+            let image = page.thumbnail(of: CGSize(width: 1400, height: 1400), for: .cropBox)
             thumbnails[i] = image.cgImage(forProposedRect: nil, context: nil, hints: nil)
             await Task.yield()
         }
@@ -148,9 +154,25 @@ struct PageEditorSheet: View {
     }
 }
 
+/// Regler für die Größe der Seitenminiaturen (Seiten bearbeiten, Scan-Vorschau).
+struct PageSizeSlider: View {
+    @Binding var height: Double
+
+    var body: some View {
+        HStack(spacing: 4) {
+            Image(systemName: "doc").imageScale(.small)
+            Slider(value: $height, in: SettingsKey.pageThumbHeightRange).frame(width: 160)
+            Image(systemName: "doc").imageScale(.large)
+        }
+        .foregroundStyle(.secondary)
+        .help("Größe der Seiten")
+    }
+}
+
 private struct EditorThumb: View {
     let image: CGImage?
     let rotation: Int
+    let height: Double
     let label: String
     /// eine andere Seite (ID) wurde hier abgelegt
     let onDrop: (Int) -> Void
@@ -167,7 +189,7 @@ private struct EditorThumb: View {
                     ProgressView()
                 }
             }
-            .frame(height: 200)
+            .frame(height: height)
             .background(Color.white)
             .shadow(radius: 2)
             Text(label).font(.caption).foregroundStyle(.secondary)

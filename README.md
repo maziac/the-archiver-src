@@ -116,7 +116,10 @@ Woher das Datum stammt, steht in der Info (ⓘ) unter „Dokumentdatum“.
 Lässt sich eine Datei zwar lesen, aber nicht vollständig verarbeiten, wird sie trotzdem archiviert und
 als „zu prüfen“ markiert:
 
-- **kein Text erkannt:** Die OCR fand auf einer Bild-Seite keinen Text.
+- **kein Text erkannt:** Die OCR fand auf einer Bild-Seite mit Inhalt (Foto, Handschrift) keinen Text.
+  **Leere Seiten**, etwa unbedruckte Rückseiten, sind kein Problem. Die Info zeigt sie als „leer“.
+  Erkannt wird das am Anteil dunkler Pixel; Staub, Scannerränder, Lochung, Maschinencodes am Rand (z. B. DataMatrix) und durchscheinender Text der
+  Rückseite zählen nicht. Ältere Dokumente werden beim ersten Start einmal nachgeprüft.
 - **kein Titel/keine Beschreibung:** Apple Intelligence war nicht verfügbar oder hat abgelehnt.
 - **kein Datum gefunden:** Es gilt das Tagesdatum, auch im Dateinamen.
 - **Seitenreihenfolge korrigiert / prüfen** (nur Import, siehe „Seitenreihenfolge“).
@@ -124,13 +127,15 @@ als „zu prüfen“ markiert:
 Es gibt zwei Stufen: **Fehler** (rot, ⚠︎) und **Hinweise** (gelb, ⓘ). Hinweise sind die Seitenreihenfolge
 und ein bewusst abgeschaltetes Apple Intelligence. Die Farbe richtet sich nach dem schwersten Problem;
 der Tooltip nennt die Gründe. Der Schalter
-**„Nur mit Problemen“** filtert sie, auch kombiniert mit der Suche. Die Markierung verschwindet, sobald
+**„Nur mit Problemen“** filtert sie (rote und gelbe), auch kombiniert mit der Suche. Die Markierung verschwindet, sobald
 du Titel bzw. Datum über „Bearbeiten …“ ergänzt, über „Titel erzeugen“ oder mit Rechtsklick →
 **„Als geprüft markieren“**. Die Vermerke stehen im PDF selbst (siehe unten).
 
 Im Archiv lassen sich Datum, Titel und Beschreibung per Rechtsklick → **Bearbeiten …** ändern. Die Datei
 wird dabei umbenannt. Der Stempel auf Seite 1 behält das Datum vom Speichern.
-**Vorschau im Archiv:** Ein Klick auf ein Dokument zeigt es rechts neben der Liste. Das Suchfeld
+**Vorschau im Archiv:** Ein Klick auf ein Dokument zeigt es rechts neben der Liste. Oben rechts
+gibt es **Drucken** (⌘P, auch per Rechtsklick in der Liste) und **Teilen** (Mail als Anhang,
+Nachrichten, AirDrop …). Das Suchfeld
 der Vorschau übernimmt den Suchbegriff aus dem Archiv und lässt sich frei ändern. Alle Treffer sind
 gelb markiert, der aktuelle ist ausgewählt. Mit ⏎ oder ⌘G springst du zum nächsten Treffer, mit ⇧⌘G
 zum vorherigen. Die Trefferliste unter dem Dokument zeigt Seite und Textumgebung; ein Klick springt hin.

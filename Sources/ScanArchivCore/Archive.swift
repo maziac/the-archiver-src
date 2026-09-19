@@ -251,6 +251,30 @@ public final class Archive: @unchecked Sendable {
         return (meta, (0..<count).map { check.page(at: $0)?.string ?? "" })
     }
 
+    /// Nachprüfung für ältere Dokumente: Seiten mit Vermerk „kein Text erkannt“, die in Wahrheit leer
+    /// sind, verlieren den Vermerk und gelten als `.blank`.
+    /// - Returns: neue Lage und Metadaten, falls sich etwas geändert hat
+    public func recheckBlankPages(url: URL, date: Date, title: String, summary: String) throws
+        -> (url: URL, meta: DocumentMetadata?)? {
+        guard let meta = PDFMetadata.read(url: url), let document = CGPDFDocument(url as CFURL) else { return nil }
+        let flagged = meta.issues.flatMap { issue -> [Int] in
+            if case let .noText(pages) = issue { return pages }
+            return []
+        }
+        let blank = Set(flagged.filter { page in
+            ImageTools.renderPDFPage(document, index: page - 1, dpi: 120, gray: true).map(BlankPage.isBlank) == true
+        })
+        guard !blank.isEmpty else { return nil }
+        return try updateMetadata(url: url, date: date, title: title, summary: summary) { meta in
+            meta.issues = meta.issues.compactMap { issue in
+                guard case let .noText(pages) = issue else { return issue }
+                let remaining = pages.filter { !blank.contains($0) }
+                return remaining.isEmpty ? nil : .noText(pages: remaining)
+            }
+            for page in blank where meta.pages.indices.contains(page - 1) { meta.pages[page - 1] = .blank }
+        }
+    }
+
     /// Stempeltext („Nr. 000123 · 19.09.2026“) aus dem Text einer Seite.
     static func stampText(in pageText: String) -> String? {
         guard let range = pageText.range(of: #"Nr\. \d+ · \d{2}\.\d{2}\.\d{4}"#, options: .regularExpression) else { return nil }

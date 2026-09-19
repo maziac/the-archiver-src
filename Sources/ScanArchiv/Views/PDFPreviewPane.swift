@@ -161,6 +161,11 @@ struct PDFPreviewPane: View {
                                      editPages: editPages.map { edit in { showInfo = false; edit() } })
                 }
             if let url = preview.url {
+                Button { DocumentPrinter.print(url: url) } label: { Image(systemName: "printer") }
+                    .keyboardShortcut("p", modifiers: .command)
+                    .help("Drucken (⌘P)")
+                ShareLink(item: url) { Image(systemName: "square.and.arrow.up") }
+                    .help("Teilen – z. B. per Mail, Nachrichten oder AirDrop")
                 Button { NSWorkspace.shared.open(url) } label: { Image(systemName: "arrow.up.forward.app") }
                     .help("In Vorschau.app öffnen")
             }
@@ -235,6 +240,24 @@ private struct PDFKitView: NSViewRepresentable {
             view.go(to: selection)
         } else {
             view.clearSelection()
+        }
+    }
+}
+
+/// Druckt ein Archiv-PDF mit dem normalen macOS-Druckdialog (als Sheet am aktuellen Fenster).
+@MainActor
+enum DocumentPrinter {
+    static func print(url: URL) {
+        guard let document = PDFDocument(url: url),
+              let operation = document.printOperation(for: NSPrintInfo.shared, scalingMode: .pageScaleDownToFit, autoRotate: true)
+        else { return }
+        operation.jobTitle = url.deletingPathExtension().lastPathComponent
+        operation.showsPrintPanel = true
+        operation.showsProgressPanel = true
+        if let window = NSApp.keyWindow ?? NSApp.mainWindow {
+            operation.runModal(for: window, delegate: nil, didRun: nil, contextInfo: nil)
+        } else {
+            operation.run()
         }
     }
 }

@@ -38,12 +38,12 @@ struct SearchView: View {
                     .foregroundStyle(.secondary)
                     .monospacedDigit()
                 Toggle(isOn: $onlyIssues) {
-                    Label("Nur mit Problemen (\(model.issueCount))", systemImage: "exclamationmark.triangle")
+                    Text("Nur mit Problemen (\(model.issueCount))")
                 }
                 .toggleStyle(.button)
-                .tint(.red)
+                .tint(.orange)
                 .disabled(model.issueCount == 0 && !onlyIssues)
-                .help("Nur Dokumente zeigen, bei denen Texterkennung, Titel/Beschreibung oder Datum nicht geklappt haben")
+                .help("Nur Dokumente zeigen, die geprüft werden sollten: rot bei Fehlern (Texterkennung, Titel, Datum), gelb bei Hinweisen wie der Seitenreihenfolge")
                 Menu {
                     Button("Index neu aufbauen") { model.reindex(full: true) }
                     Button("Archivordner öffnen") {
@@ -185,6 +185,8 @@ struct SearchView: View {
             .disabled(ids.count != 1)
             Button("Seiten bearbeiten …") { editingPages = single }
                 .disabled(single?.meta == nil)
+            Button("Drucken …") { if let single { DocumentPrinter.print(url: single.url) } }
+                .disabled(single == nil)
             Button("Im Finder zeigen") {
                 NSWorkspace.shared.activateFileViewerSelecting(ids.map { URL(fileURLWithPath: $0) })
             }

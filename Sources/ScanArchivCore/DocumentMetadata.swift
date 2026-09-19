@@ -20,8 +20,8 @@ public struct DocumentMetadata: Codable, Equatable, Sendable {
 
     public enum TextSource: String, Codable, Sendable {
         /// eigener Text der Seite, per OCR ergänzt, kein Text gefunden,
-        /// Text vorhanden aber Herkunft unbekannt (Altbestand)
-        case embedded, ocr, none, unknown
+        /// Text vorhanden aber Herkunft unbekannt (Altbestand), leere Seite (kein Problem)
+        case embedded, ocr, none, unknown, blank
     }
 
     /// Wie die Datei im Archiv entstanden ist.

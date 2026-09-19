@@ -22,13 +22,16 @@ struct ImportProcessorTests {
         try await ImportProcessor.process(file: file, archive: env.0, index: env.1, options: options)
     }
 
-    /// Weißes Bild ohne Text als PDF
-    func makeBlankImagePDF() -> URL {
-        let url = folder.appendingPathComponent("leer.pdf")
+    /// Bild mit Inhalt, aber ohne Text (Kritzelei) als PDF – eine leere Seite wäre kein Problem
+    func makeNoTextImagePDF() -> URL {
+        let url = folder.appendingPathComponent("ohne-text.pdf")
         let ctx = CGContext(data: nil, width: 620, height: 877, bitsPerComponent: 8, bytesPerRow: 0,
                             space: CGColorSpaceCreateDeviceGray(), bitmapInfo: CGImageAlphaInfo.none.rawValue)!
         ctx.setFillColor(gray: 1, alpha: 1)
         ctx.fill(CGRect(x: 0, y: 0, width: 620, height: 877))
+        ctx.setStrokeColor(gray: 0, alpha: 1)
+        ctx.setLineWidth(4)
+        ctx.strokeEllipse(in: CGRect(x: 150, y: 300, width: 300, height: 220))
         var box = CGRect(x: 0, y: 0, width: 595, height: 842)
         let pdf = CGContext(url as CFURL, mediaBox: &box, nil)!
         pdf.beginPDFPage(nil)
@@ -150,7 +153,7 @@ struct ImportProcessorTests {
 
     @Test func issuesAreStoredInPDFAndIndex() async throws {
         let env = try makeEnv()
-        let result = try await process(makeBlankImagePDF(), env)
+        let result = try await process(makeNoTextImagePDF(), env)
         #expect(result.issues.contains(.noText(pages: [1])))
         // kein Datum im Text → Ersatz aus der Datei (hier: Erstelldatum im PDF), daher kein Vermerk „kein Datum“
         #expect(!result.issues.contains(.noDate))
@@ -163,7 +166,7 @@ struct ImportProcessorTests {
 
     @Test func rebuildRestoresEverythingFromPDFs() async throws {
         let env = try makeEnv()
-        let result = try await process(makeBlankImagePDF(), env)
+        let result = try await process(makeNoTextImagePDF(), env)
         _ = try await process(helpers.makeTextPDF(), env)
         try env.1.sync(folder: env.0.folder, full: true)
         let records = try env.1.search("")
@@ -173,7 +176,7 @@ struct ImportProcessorTests {
         #expect(restored.issues == result.issues)
         #expect(try env.1.search("", onlyIssues: true).count == 2)  // beide ohne Titel (KI im Test aus)
         // Originalname durchsuchbar, Duplikatprüfung funktioniert auch nach dem Neuaufbau
-        #expect(try env.1.search("leer").map(\.number) == [result.number])
+        #expect(try env.1.search("ohne").map(\.number) == [result.number])
         #expect(try env.1.record(forSHA256: result.meta.originalSHA256!)?.number == result.number)
     }
 

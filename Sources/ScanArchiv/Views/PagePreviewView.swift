@@ -4,6 +4,7 @@ import SwiftUI
 /// Miniaturen in der fertigen Reihenfolge; Seiten lassen sich drehen, verschieben oder entfernen.
 struct PagePreviewView: View {
     @Bindable var session: ScanSession
+    @AppStorage(SettingsKey.pageThumbHeight) private var thumbHeight = SettingsKey.defaultPageThumbHeight
 
     var body: some View {
         VStack(spacing: 0) {
@@ -13,6 +14,7 @@ struct PagePreviewView: View {
                 Text("Klick dreht um 180°, Rechtsklick um 90°. Ziehen ändert die Reihenfolge.")
                     .foregroundStyle(.secondary)
                 Spacer()
+                PageSizeSlider(height: $thumbHeight)
                 Button("Seite scannen", systemImage: "plus.viewfinder") { session.scanSinglePage() }
                     .help("Eine weitere Seite scannen und hinten anhängen")
                     .disabled(!session.scanner.isReady)
@@ -32,9 +34,9 @@ struct PagePreviewView: View {
                 Divider()
             }
             ScrollView {
-                LazyVGrid(columns: [GridItem(.adaptive(minimum: 150), spacing: 16)], spacing: 16) {
+                LazyVGrid(columns: [GridItem(.adaptive(minimum: thumbHeight * 0.72), spacing: 16)], spacing: 16) {
                     ForEach(Array(session.pages.enumerated()), id: \.element.id) { index, page in
-                        PageThumb(session: session, page: page, number: index + 1)
+                        PageThumb(session: session, page: page, number: index + 1, height: thumbHeight)
                     }
                 }
                 .padding(16)
@@ -143,6 +145,7 @@ private struct PageThumb: View {
     let session: ScanSession
     let page: ScannedPage
     let number: Int
+    let height: Double
     @State private var dropTargeted = false
 
     private var label: String {
@@ -158,7 +161,7 @@ private struct PageThumb: View {
             Image(nsImage: page.thumbnail)
                 .resizable()
                 .aspectRatio(contentMode: .fit)
-                .frame(height: 200)
+                .frame(height: height)
                 .background(Color.white)
                 .shadow(radius: 2)
                 .overlay(alignment: .topTrailing) {

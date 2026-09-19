@@ -90,6 +90,13 @@ public enum ImportProcessor {
         }
     }
 
+    /// Herkunft des Textes einer OCR-Seite; ohne Text wird zwischen leer (kein Problem) und
+    /// Inhalt ohne erkennbaren Text (Problem) unterschieden.
+    static func textSource(text: String, image: CGImage) -> DocumentMetadata.TextSource {
+        if DocumentIssue.hasText(text) { return .ocr }
+        return BlankPage.isBlank(image) ? .blank : .none
+    }
+
     public static func sha256(of data: Data) -> String {
         SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
     }
@@ -145,10 +152,10 @@ public enum ImportProcessor {
                 }).value else { throw ImportError.unreadable(name) }
                 let lines = try await OCRService.recognize(image)
                 let pageText = lines.map(\.text).joined(separator: "\n")
-                let hasText = DocumentIssue.hasText(pageText)
-                if !hasText { emptyPages.append(i + 1) }
+                let source = textSource(text: pageText, image: image)
+                if source == .none { emptyPages.append(i + 1) }
                 pageTexts.append(pageText)
-                textSources.append(hasText ? .ocr : .none)
+                textSources.append(source)
                 edits.append(.init(index: i, lines: lines))
                 if convert {
                     let size = CGSize(width: Double(image.width) / renderDPI * 72, height: Double(image.height) / renderDPI * 72)
@@ -214,10 +221,10 @@ public enum ImportProcessor {
             progress("Texterkennung")
             let lines = try await OCRService.recognize(image)
             let text = lines.map(\.text).joined(separator: "\n")
-            let hasText = DocumentIssue.hasText(text)
-            if !hasText { issues.append(.noText(pages: [1])) }
+            let pageSource = textSource(text: text, image: image)
+            if pageSource == .none { issues.append(.noText(pages: [1])) }
             pageTexts = [text]
-            textSources = [hasText ? .ocr : .none]
+            textSources = [pageSource]
             let convert = options.imagePreset != .original || options.colorMode != .original
             makeCandidates = { number, date, title, summary, meta in
                 let plain = PageCompressor.encode(image, pageSize: size, preset: .original, color: .original, originalJPEG: originalJPEG)
@@ -279,7 +286,7 @@ public enum ImportProcessor {
         let finalMeta = meta
 
         progress("Speichern")
-        let expectedTextPages = Set(textSources.enumerated().filter { $0.element != .none }.map(\.offset))
+        let expectedTextPages = Set(textSources.enumerated().filter { $0.element != .none && $0.element != .blank }.map(\.offset))
         let pageCount = textSources.count
         let expectedTexts = pageOrder == nil ? nil : pageTexts
         let saved = try await Task.detached { () throws -> (number: Int, url: URL, meta: DocumentMetadata) in

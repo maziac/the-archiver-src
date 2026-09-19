@@ -168,6 +168,7 @@ public enum DocumentInfo {
         if let n = counts[.ocr] { parts.append("\(pages(n)) per OCR erkannt") }
         if let n = counts[.unknown] { parts.append("\(pages(n)) mit Text (Herkunft unbekannt, ältere Version)") }
         if let n = counts[.none] { parts.append("\(pages(n)) ohne Text") }
+        if let n = counts[.blank] { parts.append(n == 1 ? "1 Seite leer" : "\(n) Seiten leer") }
         return parts.isEmpty ? "–" : parts.joined(separator: " · ")
     }
 }
