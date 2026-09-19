@@ -110,16 +110,15 @@ public enum Summarizer {
         if let reason = unavailableReason { throw SummarizerError.unavailable(reason) }
         #if canImport(FoundationModels)
         if #available(macOS 26, *) {
-            let session = takeSession()
             do {
-                let response = try await session.respond(
-                    to: "Dokumenttext:\n\(String(text.prefix(maxCharacters)))",
-                    generating: GeneratedSummary.self)
-                let generated = response.content
-                return DocumentSuggestion(
-                    title: generated.title.trimmingCharacters(in: .whitespacesAndNewlines.union(.init(charactersIn: "\"'"))),
-                    summary: generated.summary.trimmingCharacters(in: .whitespacesAndNewlines),
-                    date: DateExtractor.validate(modelDate: generated.documentDate, against: text) ?? fallbackDate)
+                return try await generate(from: cleanedForModel(text), fullText: text, fallbackDate: fallbackDate)
+            } catch LanguageModelSession.GenerationError.unsupportedLanguageOrLocale {
+                // zweiter Versuch nur mit eindeutigen Textzeilen (z. B. Steuer-/Codezeilen im PDF)
+                do {
+                    return try await generate(from: cleanedForModel(text, strict: true), fullText: text, fallbackDate: fallbackDate)
+                } catch LanguageModelSession.GenerationError.unsupportedLanguageOrLocale {
+                    throw SummarizerError.failed("Apple Intelligence hält die Sprache des Textes für nicht unterstützt.")
+                }
             } catch let error as LanguageModelSession.GenerationError {
                 switch error {
                 case .guardrailViolation, .refusal:
@@ -133,5 +132,45 @@ public enum Summarizer {
         }
         #endif
         throw SummarizerError.unavailable(unavailableReason ?? "")
+    }
+
+    #if canImport(FoundationModels)
+    @available(macOS 26, *)
+    private static func generate(from modelText: String, fullText: String, fallbackDate: Date?) async throws -> DocumentSuggestion {
+        let response = try await takeSession().respond(
+            to: "Dokumenttext:\n\(String(modelText.prefix(maxCharacters)))",
+            generating: GeneratedSummary.self)
+        let generated = response.content
+        return DocumentSuggestion(
+            title: generated.title.trimmingCharacters(in: .whitespacesAndNewlines.union(.init(charactersIn: "\"'"))),
+            summary: generated.summary.trimmingCharacters(in: .whitespacesAndNewlines),
+            date: DateExtractor.validate(modelDate: generated.documentDate, against: fullText) ?? fallbackDate)
+    }
+    #endif
+
+    /// Entfernt maschinelle Zeilen, die das Sprachmodell irritieren – z. B. unsichtbare Steuerzeilen von
+    /// Druckdienstleistern („#!#METASTART#!#MANDANT#!#…“), Barcode-Inhalte oder Zeichensalat.
+    /// Der Text im Archiv und im Suchindex bleibt davon unberührt.
+    /// - strict: nur Zeilen behalten, die überwiegend aus Buchstaben und Leerzeichen bestehen
+    static func cleanedForModel(_ text: String, strict: Bool = false) -> String {
+        text.components(separatedBy: .newlines).filter { line in
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            guard !trimmed.isEmpty else { return true }
+            let scalars = trimmed.unicodeScalars
+            let letters = scalars.filter { CharacterSet.letters.contains($0) }.count
+            let spaces = scalars.filter { CharacterSet.whitespaces.contains($0) }.count
+            let digits = scalars.filter { CharacterSet.decimalDigits.contains($0) }.count
+            let symbols = scalars.count - letters - spaces - digits
+            // sehr lange Zeichenkette ohne Leerzeichen (keine normale Sprache)
+            if trimmed.split(separator: " ").contains(where: { $0.count > 40 }) { return false }
+            // überwiegend Sonderzeichen
+            if scalars.count >= 8, Double(symbols) / Double(scalars.count) > 0.3 { return false }
+            // Wiederholte Trennmuster wie „#!#“, „|||“, „~~~“
+            if trimmed.contains("#!#") || trimmed.contains("|||") { return false }
+            if strict {
+                return scalars.count < 4 || Double(letters + spaces) / Double(scalars.count) >= 0.6
+            }
+            return true
+        }.joined(separator: "\n")
     }
 }
