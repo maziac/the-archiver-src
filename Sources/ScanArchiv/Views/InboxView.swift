@@ -20,6 +20,9 @@ struct InboxView: View {
             Divider()
             footer
         }
+        .sheet(isPresented: Binding(get: { !inbox.pendingFolders.isEmpty }, set: { if !$0 { inbox.pendingFolders = [] } })) {
+            FolderImportSheet(folders: inbox.pendingFolders) { files in inbox.add(files: files) }
+        }
     }
 
     // MARK: Ablagefläche
@@ -29,13 +32,13 @@ struct InboxView: View {
             Image(systemName: "tray.and.arrow.down")
                 .font(.system(size: 40, weight: .light))
                 .foregroundStyle(.tint)
-            Text("PDFs oder Bilder hierher ziehen")
+            Text("PDFs, Bilder oder Ordner hierher ziehen")
                 .font(.title3.weight(.semibold))
             Text("Jede Datei wird automatisch zu einem eigenen Dokument: Texterkennung, Titel, Beschreibung, Datum und Nummer. Die Originale bleiben erhalten.")
                 .multilineTextAlignment(.center)
                 .foregroundStyle(.secondary)
                 .frame(maxWidth: 520)
-            Button("Dateien auswählen …") { chooseFiles() }
+            Button("Dateien oder Ordner auswählen …") { chooseFiles() }
                 .controlSize(.large)
         }
         .frame(maxWidth: .infinity)
@@ -47,9 +50,8 @@ struct InboxView: View {
                               style: StrokeStyle(lineWidth: dropTargeted ? 3 : 1.5, dash: [8]))
         )
         .dropDestination(for: URL.self) { urls, _ in
-            let files = urls.filter { !$0.hasDirectoryPath }
-            guard !files.isEmpty else { return false }
-            inbox.add(files: files)
+            guard !urls.isEmpty else { return false }
+            inbox.accept(urls)  // Dateien sofort, Ordner über den Dialog
             return true
         } isTargeted: { dropTargeted = $0 }
     }
@@ -59,9 +61,9 @@ struct InboxView: View {
         panel.title = "Dateien in den Eingang legen"
         panel.prompt = "Übernehmen"
         panel.allowsMultipleSelection = true
-        panel.canChooseDirectories = false
+        panel.canChooseDirectories = true
         panel.allowedContentTypes = [.pdf] + ImportProcessor.imageTypes
-        if panel.runModal() == .OK { inbox.add(files: panel.urls) }
+        if panel.runModal() == .OK { inbox.accept(panel.urls) }
     }
 
     // MARK: Kopfzeile
@@ -89,7 +91,9 @@ struct InboxView: View {
     }
 
     private var statusLine: String {
-        var parts = ["\(inbox.waitingCount) wartend", "\(inbox.processingCount) in Arbeit", "\(inbox.doneCount) fertig"]
+        var parts: [String] = []
+        if let copying = inbox.copying { parts.append("kopiere \(copying.done) / \(copying.total)") }
+        parts += ["\(inbox.waitingCount) wartend", "\(inbox.processingCount) in Arbeit", "\(inbox.doneCount) fertig"]
         if inbox.duplicateCount > 0 { parts.append("\(inbox.duplicateCount) Duplikat(e)") }
         if inbox.failedCount > 0 { parts.append("\(inbox.failedCount) Fehler") }
         if inbox.isPaused { parts.append("pausiert") }

@@ -170,21 +170,47 @@ final class InboxService {
 
     // MARK: Hinzufügen
 
-    /// Kopiert gezogene/ausgewählte Dateien in den Eingangsordner (Originale bleiben erhalten).
+    /// Ordner, die gerade abgelegt wurden und auf die Auswahl im Dialog warten
+    var pendingFolders: [URL] = []
+    /// Fortschritt beim Kopieren in den Eingang (nil = kein Kopiervorgang)
+    private(set) var copying: (done: Int, total: Int)?
+
+    /// Abgelegte bzw. ausgewählte Objekte übernehmen: Dateien sofort, Ordner über den Dialog.
+    func accept(_ urls: [URL]) {
+        let folders = urls.filter(FolderScan.isDirectory)
+        let files = urls.filter { !FolderScan.isDirectory($0) }
+        if !files.isEmpty { add(files: files) }
+        if !folders.isEmpty { pendingFolders = folders }
+    }
+
+    /// Kopiert Dateien in den Eingangsordner (Originale bleiben erhalten). Läuft im Hintergrund,
+    /// damit auch große Ordner das Fenster nicht blockieren; die Überwachung übernimmt die Kopien.
     func add(files: [URL]) {
-        guard let folder else { return }
-        for url in files {
-            let accessing = url.startAccessingSecurityScopedResource()
-            defer { if accessing { url.stopAccessingSecurityScopedResource() } }
-            if url.deletingLastPathComponent().standardizedFileURL == folder.standardizedFileURL { continue }
-            do {
-                try FileManager.default.copyItem(at: url, to: Self.uniqueURL(for: url.lastPathComponent, in: folder))
-            } catch {
-                items.append(Item(fileName: url.lastPathComponent, url: url, added: Date(),
-                                  state: .failed("Kopieren fehlgeschlagen: \(error.localizedDescription)")))
+        guard let folder, !files.isEmpty else { return }
+        let total = files.count + (copying?.total ?? 0)
+        copying = (copying?.done ?? 0, total)
+        Task {
+            for url in files {
+                let failure = await Task.detached { () -> String? in
+                    let accessing = url.startAccessingSecurityScopedResource()
+                    defer { if accessing { url.stopAccessingSecurityScopedResource() } }
+                    if url.deletingLastPathComponent().standardizedFileURL == folder.standardizedFileURL { return nil }
+                    do {
+                        try FileManager.default.copyItem(at: url, to: InboxService.uniqueURL(for: url.lastPathComponent, in: folder))
+                        return nil
+                    } catch {
+                        return error.localizedDescription
+                    }
+                }.value
+                if let failure {
+                    items.append(Item(fileName: url.lastPathComponent, url: url, added: Date(),
+                                      state: .failed("Kopieren fehlgeschlagen: \(failure)")))
+                }
+                if let current = copying { copying = (current.done + 1, current.total) }
             }
+            if let current = copying, current.done >= current.total { copying = nil }
+            scanFolder()
         }
-        scanFolder()
     }
 
     /// „Erneut versuchen“: Datei aus `Fehler/` zurück in den Eingang legen.
@@ -207,7 +233,7 @@ final class InboxService {
         startWorkerIfNeeded()
     }
 
-    static func uniqueURL(for fileName: String, in folder: URL) -> URL {
+    nonisolated static func uniqueURL(for fileName: String, in folder: URL) -> URL {
         var candidate = folder.appendingPathComponent(fileName)
         let base = (fileName as NSString).deletingPathExtension
         let ext = (fileName as NSString).pathExtension

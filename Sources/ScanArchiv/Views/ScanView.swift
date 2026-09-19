@@ -82,9 +82,8 @@ struct ScanView: View {
                     .disabled(!scanner.isReady)
             }
             .dropDestination(for: URL.self) { urls, _ in
-                let files = urls.filter { !$0.hasDirectoryPath }
-                guard !files.isEmpty else { return false }
-                inbox.add(files: files)  // läuft automatisch über den Eingang
+                guard !urls.isEmpty else { return false }
+                inbox.accept(urls)  // läuft automatisch über den Eingang (Ordner mit Auswahldialog)
                 model.selectedTab = .inbox
                 return true
             } isTargeted: { dropTargeted = $0 }
