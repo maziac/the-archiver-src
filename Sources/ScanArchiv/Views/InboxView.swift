@@ -23,6 +23,12 @@ struct InboxView: View {
         .sheet(isPresented: Binding(get: { !inbox.pendingFolders.isEmpty }, set: { if !$0 { inbox.pendingFolders = [] } })) {
             FolderImportSheet(folders: inbox.pendingFolders) { files in inbox.add(files: files) }
         }
+        .sheet(isPresented: Binding(get: { !inbox.pendingImages.isEmpty }, set: { if !$0 { inbox.pendingImages = [] } })) {
+            let images = inbox.pendingImages
+            MultipleImagesSheet(images: images,
+                                onCombine: { inbox.addCombined(images: images) },
+                                onSeparate: { inbox.add(files: images) })
+        }
     }
 
     // MARK: Ablagefläche
@@ -34,7 +40,7 @@ struct InboxView: View {
                 .foregroundStyle(.tint)
             Text("PDFs, Bilder oder Ordner hierher ziehen")
                 .font(.title3.weight(.semibold))
-            Text("Jede Datei wird automatisch zu einem eigenen Dokument: Texterkennung, Titel, Beschreibung, Datum und Nummer. Die Originale bleiben erhalten.")
+            Text("Jede Datei wird automatisch zu einem eigenen Dokument: Texterkennung, Titel, Beschreibung, Datum und Nummer. Bei mehreren Bildern wird gefragt, ob sie ein gemeinsames Dokument ergeben. Die Originale bleiben erhalten.")
                 .multilineTextAlignment(.center)
                 .foregroundStyle(.secondary)
                 .frame(maxWidth: 520)

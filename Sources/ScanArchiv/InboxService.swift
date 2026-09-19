@@ -2,6 +2,7 @@ import Foundation
 import Observation
 import os
 import ScanArchivCore
+import UniformTypeIdentifiers
 
 /// Überwacht den Eingangsordner und verarbeitet neue Dateien nacheinander vollautomatisch.
 ///
@@ -172,15 +173,51 @@ final class InboxService {
 
     /// Ordner, die gerade abgelegt wurden und auf die Auswahl im Dialog warten
     var pendingFolders: [URL] = []
+    /// mehrere abgelegte Bilder, die auf die Entscheidung „verbinden oder einzeln“ warten
+    var pendingImages: [URL] = []
     /// Fortschritt beim Kopieren in den Eingang (nil = kein Kopiervorgang)
     private(set) var copying: (done: Int, total: Int)?
 
-    /// Abgelegte bzw. ausgewählte Objekte übernehmen: Dateien sofort, Ordner über den Dialog.
+    /// Abgelegte bzw. ausgewählte Objekte übernehmen: Ordner und mehrere Bilder über einen Dialog,
+    /// alles andere sofort.
     func accept(_ urls: [URL]) {
         let folders = urls.filter(FolderScan.isDirectory)
         let files = urls.filter { !FolderScan.isDirectory($0) }
-        if !files.isEmpty { add(files: files) }
+        let images = files.filter { url in
+            guard let type = UTType(filenameExtension: url.pathExtension) else { return false }
+            return ImportProcessor.imageTypes.contains { type.conforms(to: $0) }
+        }
+        if images.count > 1 {
+            // Nachfragen: ein Dokument aus allen Bildern oder je Bild ein Dokument?
+            pendingImages = images.sorted { $0.lastPathComponent.localizedStandardCompare($1.lastPathComponent) == .orderedAscending }
+            add(files: files.filter { !images.contains($0) })
+        } else if !files.isEmpty {
+            add(files: files)
+        }
         if !folders.isEmpty { pendingFolders = folders }
+    }
+
+    /// Bilder zu einem PDF zusammenfassen und als **ein** Dokument in den Eingang legen.
+    func addCombined(images: [URL]) {
+        guard let folder, !images.isEmpty else { return }
+        copying = (0, 1)
+        Task {
+            let failure = await Task.detached { () -> String? in
+                do {
+                    let data = try ImagesToPDF.combine(images)
+                    try data.write(to: InboxService.uniqueURL(for: ImagesToPDF.fileName(for: images), in: folder))
+                    return nil
+                } catch {
+                    return error.localizedDescription
+                }
+            }.value
+            if let failure {
+                items.append(Item(fileName: ImagesToPDF.fileName(for: images), url: images[0], added: Date(),
+                                  state: .failed("Zusammenfassen fehlgeschlagen: \(failure)")))
+            }
+            copying = nil
+            scanFolder()
+        }
     }
 
     /// Kopiert Dateien in den Eingangsordner (Originale bleiben erhalten). Läuft im Hintergrund,

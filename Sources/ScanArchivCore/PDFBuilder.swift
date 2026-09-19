@@ -58,8 +58,9 @@ public enum PDFBuilder {
     /// Baut ein durchsuchbares PDF: Seitenbild bzw. Vektor-Seite + unsichtbare OCR-Textebene je Seite,
     /// sichtbarer Nummernstempel auf Seite 1 und Standard-Metadaten (Titel, Beschreibung, Keywords).
     /// Die Bilder werden so eingebettet, wie sie übergeben werden (Kompression vorher per `PageCompressor`).
+    /// - stamp: false = ohne Nummernstempel (z. B. beim Zusammenfassen von Bildern vor dem Import)
     public static func build(pages: [PDFPageInput], number: Int, date: Date, dpi: Double,
-                             title: String = "", summary: String = "") throws -> Data {
+                             title: String = "", summary: String = "", stamp: Bool = true) throws -> Data {
         let data = NSMutableData()
         let numberText = Archive.formatNumber(number)
         let fallbackTitle = Archive.fileName(date: date, number: number).replacingOccurrences(of: ".pdf", with: "")
@@ -101,7 +102,7 @@ public enum PDFBuilder {
                 ctx.restoreGState()
             }
             drawInvisibleText(page.lines, in: ctx, pageSize: size)
-            if index == 0 {
+            if index == 0, stamp {
                 drawStamp(stampText(number: number, date: date), in: ctx, pageSize: size)
             }
 

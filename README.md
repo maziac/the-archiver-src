@@ -41,6 +41,10 @@ Vorhandene PDFs und Bilder werden vollautomatisch archiviert, ohne Vorschau:
 
 - **Tab „Eingang“:** Dateien auf die Fläche ziehen oder „Dateien oder Ordner auswählen …“ (auch ein Ziehen auf
   den Scan-Tab landet hier). Die Dateien werden in den Eingangsordner **kopiert**; deine Originale bleiben.
+- **Mehrere Bilder:** Legst du mehrere Bilder gleichzeitig ab, fragt ein Dialog, ob sie **zu einem Dokument
+  verbunden** werden (eine Seite je Bild, Reihenfolge nach Dateiname) oder **je Bild ein eigenes Dokument**
+  ergeben. Beim Verbinden werden die Bilder nicht neu kodiert; Texterkennung, Titel, Datum und Nummer
+  vergibt ScanArchiv danach wie gewohnt.
 - **Ordner:** Beim Ablegen eines Ordners fragt ein Dialog, ob **Unterordner** einbezogen werden sollen und welche
   **Dateitypen** (PDFs, Bilder) übernommen werden. Er zeigt vorab, wie viele Dateien gefunden wurden; die Auswahl
   wird gemerkt. Das Kopieren läuft im Hintergrund, der Fortschritt steht in der Kopfzeile des Eingangs.
