@@ -344,7 +344,7 @@ final class ScanSession {
                 var meta = DocumentMetadata(
                     number: 0, documentDate: date, dateSource: metaDateSource, titleSource: titleSource,
                     titleUpdated: title.isEmpty ? nil : Date(), archivedAt: Date(), source: .scan, scan: scanInfo,
-                    pages: textSources, ocr: .init(), issues: issues)
+                    pages: textSources, ocr: .init(), issues: issues, storage: .created)
                 let pagesToSave = pdfPages
                 let draft = meta
                 let saved = try await Task.detached(priority: .userInitiated) { () throws -> (number: Int, url: URL, meta: DocumentMetadata) in

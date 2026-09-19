@@ -1,6 +1,7 @@
 import CoreGraphics
 import CryptoKit
 import Foundation
+import PDFKit
 import UniformTypeIdentifiers
 
 public enum ImportError: LocalizedError, Equatable {
@@ -44,8 +45,16 @@ public struct ImportResult: Sendable {
     public var issues: [DocumentIssue] { meta.issues }
 }
 
+/// Eine mögliche Fassung der Archivdatei.
+struct Candidate {
+    var storage: DocumentMetadata.Storage
+    var compressed = false
+    var data: Data
+}
+
 /// Verarbeitet eine Datei vollautomatisch: Duplikatprüfung, Text (eingebettet oder per OCR), Vorschlag für
-/// Titel, Beschreibung und Datum, Kompression (nur wenn kleiner), Stempel, Metadaten, Archivieren, Indexieren.
+/// Titel, Beschreibung und Datum, Stempel, Metadaten, Archivieren, Indexieren. Es entstehen mehrere Fassungen
+/// (angehängt, neu geschrieben, komprimiert); die kleinste gültige gewinnt.
 /// Probleme werden im Dokument vermerkt, das Dokument wird trotzdem archiviert.
 public enum ImportProcessor {
     public static let imageTypes: [UTType] = [.png, .jpeg, .tiff, .heic, .bmp, .gif]
@@ -54,6 +63,15 @@ public enum ImportProcessor {
     public static func isSupported(_ url: URL) -> Bool {
         guard let type = UTType(filenameExtension: url.pathExtension) else { return false }
         return type.conforms(to: .pdf) || imageTypes.contains { type.conforms(to: $0) }
+    }
+
+    /// Prüft eine erzeugte Fassung: Seitenzahl, Text auf allen Seiten, die Text haben sollen,
+    /// Stempel (Nummer) und Metadaten müssen lesbar sein.
+    static func validate(_ data: Data, number: Int, pageCount: Int, textPages: Set<Int>) -> Bool {
+        guard let pdf = PDFDocument(data: data), pdf.pageCount == pageCount,
+              PDFMetadata.read(pdf)?.number == number,
+              !pdf.findString("Nr. \(Archive.formatNumber(number))", withOptions: []).isEmpty else { return false }
+        return textPages.allSatisfy { DocumentIssue.hasText(pdf.page(at: $0)?.string ?? "") }
     }
 
     public static func sha256(of data: Data) -> String {
@@ -78,8 +96,9 @@ public enum ImportProcessor {
         var textSources: [DocumentMetadata.TextSource] = []
         let source: DocumentMetadata.Source
         let preset: SizePreset
-        /// liefert (unverändert, umgewandelt?) – jeweils mit Stempel, noch ohne ScanArchiv-Metadaten
-        let makeCandidates: (_ number: Int, _ date: Date, _ title: String, _ summary: String) throws -> (Data, Data?)
+        /// Mögliche Fassungen der Archivdatei; jede bekommt ihre eigenen Metadaten (Speicherart, Kompression).
+        let makeCandidates: (_ number: Int, _ date: Date, _ title: String, _ summary: String,
+                             _ meta: (DocumentMetadata.Storage, Bool) -> DocumentMetadata) throws -> [Candidate]
 
         if type.conforms(to: .pdf) {
             // PDF: Textseiten bleiben unverändert; Bildseiten bekommen OCR und werden ggf. komprimiert
@@ -125,12 +144,27 @@ public enum ImportProcessor {
             }
             if !emptyPages.isEmpty { issues.append(.noText(pages: emptyPages)) }
             let hasImagePages = textSources.contains { $0 != .embedded }
-            makeCandidates = { number, date, title, summary in
-                let original = try PDFStamper.stamp(source: file, pages: edits, number: number, date: date, title: title, summary: summary)
-                guard convert, hasImagePages else { return (original, nil) }
-                let converted = try PDFBuilder.build(pages: composed, number: number, date: date, dpi: renderDPI,
+            let overlays = edits.filter { !$0.lines.isEmpty }.map { PDFAppender.Overlay(pageIndex: $0.index, lines: $0.lines) }
+            makeCandidates = { number, date, title, summary, meta in
+                var candidates: [Candidate] = []
+                // 1. Original unverändert, Zusätze angehängt (inkrementelles Update)
+                if let appended = try? PDFAppender.stamp(original: fileData, stampText: PDFBuilder.stampText(number: number, date: date),
+                                                         overlays: overlays, meta: meta(.appended, false), title: title, summary: summary) {
+                    candidates.append(Candidate(storage: .appended, data: appended))
+                }
+                // 2. von PDFKit neu geschrieben (manchmal kleiner, z. B. bei ungünstig aufgebauten Originalen)
+                if let rewritten = try? PDFStamper.stamp(source: file, pages: edits, number: number, date: date, title: title,
+                                                         summary: summary, meta: meta(.rewritten, false)) {
+                    candidates.append(Candidate(storage: .rewritten, data: rewritten))
+                }
+                // 3. Bildseiten komprimiert neu erzeugt
+                if convert, hasImagePages {
+                    let built = try PDFBuilder.build(pages: composed, number: number, date: date, dpi: renderDPI,
                                                      title: title, summary: summary)
-                return (original, converted)
+                    candidates.append(Candidate(storage: .rebuilt, compressed: true, data: try PDFMetadata.finalize(
+                        built, meta: meta(.rebuilt, true), title: title, summary: summary)))
+                }
+                return candidates
             }
         } else {
             // Bild: einseitiges PDF in voller Auflösung, JPEGs ohne erneute Kompression
@@ -148,16 +182,20 @@ public enum ImportProcessor {
             pageTexts = [text]
             textSources = [hasText ? .ocr : .none]
             let convert = options.imagePreset != .original || options.colorMode != .original
-            makeCandidates = { number, date, title, summary in
+            makeCandidates = { number, date, title, summary, meta in
                 let plain = PageCompressor.encode(image, pageSize: size, preset: .original, color: .original, originalJPEG: originalJPEG)
                 let original = try PDFBuilder.build(pages: [PDFPageInput(encoded: plain, lines: lines)], number: number, date: date,
                                                     dpi: dpi, title: title, summary: summary)
-                guard convert else { return (original, nil) }
+                var candidates = [Candidate(storage: .created, data: try PDFMetadata.finalize(
+                    original, meta: meta(.created, false), title: title, summary: summary))]
+                guard convert else { return candidates }
                 let small = PageCompressor.encode(image, pageSize: size, preset: options.imagePreset, color: options.colorMode,
                                                   originalJPEG: originalJPEG)
                 let converted = try PDFBuilder.build(pages: [PDFPageInput(encoded: small, lines: lines)], number: number, date: date,
                                                      dpi: small.dpi, title: title, summary: summary)
-                return (original, converted)
+                candidates.append(Candidate(storage: .created, compressed: true, data: try PDFMetadata.finalize(
+                    converted, meta: meta(.created, true), title: title, summary: summary)))
+                return candidates
             }
         }
 
@@ -192,18 +230,29 @@ public enum ImportProcessor {
         let finalMeta = meta
 
         progress("Speichern")
+        let expectedTextPages = Set(textSources.enumerated().filter { $0.element != .none }.map(\.offset))
+        let pageCount = textSources.count
         let saved = try await Task.detached { () throws -> (number: Int, url: URL, meta: DocumentMetadata) in
             var stored = finalMeta
             let result = try archive.save(date: date, title: title) { number in
-                let (original, converted) = try makeCandidates(number, date, title, summary)
-                // Umwandlung nur übernehmen, wenn sie wirklich kleiner ist
-                let useConverted = converted.map { $0.count < original.count } ?? false
-                stored.number = number
-                if converted != nil || preset != .original || options.colorMode != .original {
-                    stored.compression = .init(preset: preset, colorMode: options.colorMode, applied: useConverted,
-                                               originalBytes: original.count, resultBytes: (useConverted ? converted! : original).count)
+                let metaFor: (DocumentMetadata.Storage, Bool) -> DocumentMetadata = { storage, compressed in
+                    var m = finalMeta
+                    m.number = number
+                    m.storage = storage
+                    if preset != .original || options.colorMode != .original {
+                        m.compression = .init(preset: preset, colorMode: options.colorMode, applied: compressed,
+                                              originalBytes: nil, resultBytes: nil)
+                    }
+                    return m
                 }
-                return try PDFMetadata.finalize(useConverted ? converted! : original, meta: stored, title: title, summary: summary)
+                // Die kleinste Fassung gewinnt – aber nur, wenn Text, Stempel und Metadaten lesbar sind
+                let candidates = try makeCandidates(number, date, title, summary, metaFor)
+                let valid = candidates.filter {
+                    validate($0.data, number: number, pageCount: pageCount, textPages: expectedTextPages)
+                }
+                guard let best = valid.min(by: { $0.data.count < $1.data.count }) else { throw ImportError.unreadable(name) }
+                stored = metaFor(best.storage, best.compressed)
+                return best.data
             }
             return (result.number, result.url, stored)
         }.value

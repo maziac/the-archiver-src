@@ -23,6 +23,18 @@ public struct DocumentMetadata: Codable, Equatable, Sendable {
         case embedded, ocr, none, unknown
     }
 
+    /// Wie die Datei im Archiv entstanden ist.
+    public enum Storage: String, Codable, Sendable {
+        /// Original unverändert, Stempel/Textebene/Metadaten per inkrementellem Update angehängt
+        case appended
+        /// Original von PDFKit neu geschrieben (war kleiner als das Anhängen)
+        case rewritten
+        /// Seiten neu erzeugt (Kompression)
+        case rebuilt
+        /// von ScanArchiv erstellt (Scan, Bild-Import)
+        case created
+    }
+
     public struct ScanInfo: Codable, Equatable, Sendable {
         public var scanner: String?
         public var dpi: Int
@@ -85,6 +97,8 @@ public struct DocumentMetadata: Codable, Equatable, Sendable {
     public var app: String
     /// Programmversion der letzten Änderung (Bearbeiten, Prüfen, Titel erzeugen, Migration)
     public var updatedWith: String?
+    /// Entstehung der Archivdatei (nil = ältere Version)
+    public var storage: Storage?
 
     /// Aktuelle Programmversion; die App setzt sie beim Start aus dem Bundle (z. B. „ScanArchiv 1.1 (Build 202609191030)“).
     nonisolated(unsafe) public static var appName = "ScanArchiv"
@@ -95,7 +109,7 @@ public struct DocumentMetadata: Codable, Equatable, Sendable {
                 archivedAt: Date = Date(), source: Source, originalFileName: String? = nil, originalSize: Int? = nil,
                 originalSHA256: String? = nil, scan: ScanInfo? = nil, compression: CompressionInfo? = nil,
                 pages: [TextSource] = [], ocr: OCRInfo? = nil, issues: [DocumentIssue] = [], app: String = DocumentMetadata.appName,
-                updatedWith: String? = nil) {
+                updatedWith: String? = nil, storage: Storage? = nil) {
         self.number = number
         self.documentDate = documentDate
         self.dateSource = dateSource
@@ -113,13 +127,20 @@ public struct DocumentMetadata: Codable, Equatable, Sendable {
         self.issues = issues
         self.app = app
         self.updatedWith = updatedWith
+        self.storage = storage
     }
 
     func encoded() throws -> String {
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .deferredToDate  // Sekunden seit 2001, bitgenau
-        encoder.outputFormatting = [.sortedKeys]
-        return String(decoding: try encoder.encode(self), as: UTF8.self)
+        encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
+        let json = String(decoding: try encoder.encode(self), as: UTF8.self)
+        // reines ASCII (Nicht-ASCII als \uXXXX): kompakt als PDF-String, weiterhin gültiges JSON
+        var ascii = ""
+        for unit in json.utf16 {
+            if unit < 0x80 { ascii.unicodeScalars.append(Unicode.Scalar(unit)!) } else { ascii += String(format: "\\u%04x", unit) }
+        }
+        return ascii
     }
 
     static func decode(_ json: String) -> DocumentMetadata? {

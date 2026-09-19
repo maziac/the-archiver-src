@@ -137,16 +137,17 @@ public final class Archive: @unchecked Sendable {
             current.documentDate = date
             change(&current)
             current.updatedWith = DocumentMetadata.appName
-            try PDFMetadata.apply(current, title: title, summary: summary, to: pdf)
+            try writeMetadata(current, title: title, summary: summary, pdf: pdf, url: url)
             meta = current
         } else {
+            // fremdes PDF: nur Titel/Betreff (PDFKit)
             var attributes = pdf.documentAttributes ?? [:]
             attributes[PDFDocumentAttribute.titleAttribute] = title.isEmpty ? (newName as NSString).deletingPathExtension : title
             attributes[PDFDocumentAttribute.subjectAttribute] = summary
             pdf.documentAttributes = attributes
+            try write(pdf, to: url)
         }
 
-        try write(pdf, to: url)
         guard newName != url.lastPathComponent else { return (url, meta) }
         let newURL = url.deletingLastPathComponent().appendingPathComponent(newName)
         try FileManager.default.moveItem(at: url, to: newURL)
@@ -164,8 +165,7 @@ public final class Archive: @unchecked Sendable {
         if title.wholeMatch(of: #/\d{4}-\d{2}-\d{2}_\d{6,}/#) != nil { title = "" }
         var summary = attributes[PDFDocumentAttribute.subjectAttribute] as? String ?? ""
         if summary.hasPrefix("Nr. ") { summary = "" }
-        try PDFMetadata.apply(Archive.legacyMetadata(url: url, pdf: pdf, issues: issues), title: title, summary: summary, to: pdf)
-        try write(pdf, to: url)
+        try writeMetadata(Archive.legacyMetadata(url: url, pdf: pdf, issues: issues), title: title, summary: summary, pdf: pdf, url: url)
     }
 
     /// Korrigiert Altbestand, der mit einer früheren Fassung der Migration falsch beschriftet wurde
@@ -179,9 +179,8 @@ public final class Archive: @unchecked Sendable {
         meta.pages = meta.pages.map { $0 == .embedded ? .unknown : $0 }
         meta.updatedWith = DocumentMetadata.appName
         let attributes = pdf.documentAttributes ?? [:]
-        try PDFMetadata.apply(meta, title: attributes[PDFDocumentAttribute.titleAttribute] as? String ?? "",
-                              summary: attributes[PDFDocumentAttribute.subjectAttribute] as? String ?? "", to: pdf)
-        try write(pdf, to: url)
+        try writeMetadata(meta, title: attributes[PDFDocumentAttribute.titleAttribute] as? String ?? "",
+                          summary: attributes[PDFDocumentAttribute.subjectAttribute] as? String ?? "", pdf: pdf, url: url)
         return true
     }
 
@@ -198,6 +197,25 @@ public final class Archive: @unchecked Sendable {
         return DocumentMetadata(number: parsed?.number ?? 0, documentDate: parsed?.date ?? archivedAt, dateSource: .unknown,
                                 titleSource: hasTitle ? .ai : .none, archivedAt: archivedAt, source: .unknown,
                                 pages: pages, issues: issues, app: DocumentMetadata.legacyAppName, updatedWith: DocumentMetadata.appName)
+    }
+
+    /// Metadaten speichern: bevorzugt **angehängt** (inkrementelles Update, Original bleibt bitgenau),
+    /// nur wenn das scheitert oder nicht lesbar ist, durch PDFKit neu geschrieben.
+    private func writeMetadata(_ meta: DocumentMetadata, title: String, summary: String, pdf: PDFDocument, url: URL) throws {
+        if let original = try? Data(contentsOf: url),
+           let appended = try? PDFAppender.updateMetadata(original, meta: meta, title: title, summary: summary),
+           let check = PDFDocument(data: appended), check.pageCount == pdf.pageCount, PDFMetadata.read(check) == meta {
+            try write(appended, to: url)
+            return
+        }
+        try PDFMetadata.apply(meta, title: title, summary: summary, to: pdf)
+        try write(pdf, to: url)
+    }
+
+    private func write(_ data: Data, to url: URL) throws {
+        let temp = url.deletingLastPathComponent().appendingPathComponent(".tmp-\(UUID().uuidString).pdf")
+        try data.write(to: temp)
+        _ = try FileManager.default.replaceItemAt(url, withItemAt: temp)
     }
 
     /// Schreibt atomar über eine temporäre Datei im selben Ordner.

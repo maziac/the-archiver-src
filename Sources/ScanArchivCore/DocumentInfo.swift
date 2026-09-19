@@ -34,11 +34,9 @@ public enum DocumentInfo {
         var lines: [Line] = []
         func add(_ label: String, _ value: String) { lines.append(Line(label: label, value: value)) }
         let sizeText = fileSize.map { size -> String in
-            // Import: Vergleich mit dem Original
-            if let original = meta?.originalSize, original > 0 {
-                let diff = size - original
-                let reason = diff >= 0 ? "für Textebene, Stempel und Metadaten" : "durch Kompression"
-                return "\(bytes(size)) (Original \(bytes(original)), \(diff >= 0 ? "+" : "−")\(bytes(abs(diff))) \(reason))"
+            // Import: Vergleich mit dem Original, nur tatsächlich Hinzugefügtes nennen
+            if let meta, let original = meta.originalSize, original > 0 {
+                return "\(bytes(size)) (Original \(bytes(original)), \(sizeChange(size - original, meta: meta)))"
             }
             return bytes(size) + (pageCount > 0 ? " (≈ \(bytes(size / pageCount)) pro Seite)" : "")
         } ?? "–"
@@ -58,6 +56,7 @@ public enum DocumentInfo {
         if let scan = meta.scan {
             add("Scan", "\(scan.scanner ?? "Scanner"), \(scan.dpi) dpi, \(scan.colorMode == .original ? "Farbe" : scan.colorMode.label)")
         }
+        if let storage = meta.storage { add("Speicherung", storageText(storage)) }
         add("Kompression", compressionText(meta))
         add("Dateigröße", sizeText)
         add("Text je Seite", textText(meta, pageCount: pageCount))
@@ -80,6 +79,38 @@ public enum DocumentInfo {
             parts += issues.map { "⚠︎ " + $0.message }
         }
         return parts.joined(separator: "\n")
+    }
+
+    /// z. B. „+4 KB: Stempel, Metadaten angehängt“ oder „−1,7 MB durch Kompression“
+    static func sizeChange(_ diff: Int, meta: DocumentMetadata) -> String {
+        let amount = (diff >= 0 ? "+" : "−") + bytes(abs(diff))
+        let ocr = meta.pages.contains(.ocr)
+        var added = ["Stempel"]
+        if ocr { added.append("OCR-Textebene") }
+        added.append("Metadaten")
+        let list = added.joined(separator: ", ")
+        switch meta.storage {
+        case .appended?:
+            return "\(amount): \(list) angehängt"
+        case .rewritten?:
+            return "\(amount): neu geschrieben mit \(list)"
+        case .rebuilt?:
+            return diff < 0 ? "\(amount) durch Kompression" : "\(amount): Seiten neu erzeugt mit \(list)"
+        case .created?:
+            if diff < 0, meta.compression?.applied == true { return "\(amount) durch Kompression" }
+            return "\(amount): als PDF mit \(list)"
+        case nil:
+            return "\(amount) gegenüber Original"
+        }
+    }
+
+    static func storageText(_ storage: DocumentMetadata.Storage) -> String {
+        switch storage {
+        case .appended: return "Original unverändert, Zusätze angehängt"
+        case .rewritten: return "neu geschrieben (war kleiner als Anhängen)"
+        case .rebuilt: return "Seiten neu erzeugt (Kompression)"
+        case .created: return "von ScanArchiv erstellt"
+        }
     }
 
     static func sourceText(_ source: DocumentMetadata.Source) -> String {

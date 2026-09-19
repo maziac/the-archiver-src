@@ -36,21 +36,27 @@ public enum PDFStamper {
 
     public static func stamp(source: URL, pages: [PageEdit], number: Int, date: Date,
                              title: String, summary: String, meta: DocumentMetadata? = nil) throws -> Data {
+        // Stempel-Seitentyp nur für Seite 1 und Seiten mit OCR-Ebene; alle anderen bleiben normale Seiten
         let delegate = StampDelegate()
-        guard let pdf = PDFDocument(url: source) else { throw ArchiveError.unreadablePDF(source) }
-        pdf.delegate = delegate
+        guard let pdf = PDFDocument(url: source), let stampSource = PDFDocument(url: source) else {
+            throw ArchiveError.unreadablePDF(source)
+        }
+        stampSource.delegate = delegate
 
         // gewünschte Seiten in gewünschter Reihenfolge; entfernte Seiten fallen weg
-        let kept = pages.compactMap { edit -> (StampPage, PageEdit)? in
-            guard let page = pdf.page(at: edit.index) as? StampPage else { return nil }
+        let kept = pages.enumerated().compactMap { position, edit -> (PDFPage, PageEdit)? in
+            let needsOverlay = position == 0 || !edit.lines.isEmpty
+            guard let page = (needsOverlay ? stampSource : pdf).page(at: edit.index) else { return nil }
             return (page, edit)
         }
         guard !kept.isEmpty else { throw ArchiveError.unreadablePDF(source) }
         for i in stride(from: pdf.pageCount - 1, through: 0, by: -1) { pdf.removePage(at: i) }
         for (position, (page, edit)) in kept.enumerated() {
             page.rotation = ((page.rotation + edit.extraRotation) % 360 + 360) % 360
-            page.overlayLines = edit.lines
-            page.stampText = position == 0 ? PDFBuilder.stampText(number: number, date: date) : nil
+            if let stampPage = page as? StampPage {
+                stampPage.overlayLines = edit.lines
+                stampPage.stampText = position == 0 ? PDFBuilder.stampText(number: number, date: date) : nil
+            }
             pdf.insert(page, at: position)
         }
 

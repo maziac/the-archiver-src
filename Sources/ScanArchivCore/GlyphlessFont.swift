@@ -17,18 +17,22 @@ public enum GlyphlessFont {
 
     /// Zeichenbreiten wie Helvetica (in 1/1000 em), damit die Textebene kaum gestreckt werden muss –
     /// sonst hält PDFKit die Lücken zwischen den Buchstaben für Leerzeichen („E U R O …“).
-    static let advances: [UInt16] = {
-        let helvetica = CTFontCreateWithName("Helvetica" as CFString, CGFloat(unitsPerEm), nil)
-        return codepoints.map { cp in
-            guard let scalar = Unicode.Scalar(cp) else { return advance }
-            var chars = Array(String(Character(scalar)).utf16)
-            var glyphs = [CGGlyph](repeating: 0, count: chars.count)
-            guard CTFontGetGlyphsForCharacters(helvetica, &chars, &glyphs, chars.count), glyphs[0] != 0 else { return advance }
-            var size = CGSize.zero
-            CTFontGetAdvancesForGlyphs(helvetica, .horizontal, &glyphs, &size, 1)
-            return UInt16(max(1, min(2000, size.width.rounded())))
-        }
-    }()
+    static let advances: [UInt16] = codepoints.map(advance(for:))
+
+    private static let helvetica = CTFontCreateWithName("Helvetica" as CFString, CGFloat(unitsPerEm), nil)
+
+    /// Breite eines Zeichens wie in Helvetica (1/1000 em).
+    static func advance(for cp: UInt32) -> UInt16 {
+        guard let scalar = Unicode.Scalar(cp) else { return advance }
+        var chars = Array(String(Character(scalar)).utf16)
+        var glyphs = [CGGlyph](repeating: 0, count: chars.count)
+        guard CTFontGetGlyphsForCharacters(helvetica, &chars, &glyphs, chars.count), glyphs[0] != 0 else { return advance }
+        var size = CGSize.zero
+        CTFontGetAdvancesForGlyphs(helvetica, .horizontal, &glyphs, &size, 1)
+        return UInt16(max(1, min(2000, size.width.rounded())))
+    }
+
+    static let supported: Set<UInt32> = Set(codepoints)
 
     /// Unterstützte Zeichen. Leere Glyphen kosten nur wenige Bytes, und ins PDF kommen ohnehin nur die
     /// benutzten – der Vorrat ist daher großzügig, damit keine Ersatzschrift eingebettet werden muss.
@@ -70,7 +74,9 @@ public enum GlyphlessFont {
 
     // MARK: TrueType-Erzeugung
 
-    static func makeFontData() -> Data {
+    /// TrueType-Daten; Glyphe i+1 gehört zu `codepoints[i]`.
+    static func makeFontData(codepoints: [UInt32] = GlyphlessFont.codepoints) -> Data {
+        let advances = codepoints == GlyphlessFont.codepoints ? GlyphlessFont.advances : codepoints.map(advance(for:))
         let numGlyphs = UInt16(codepoints.count + 1)  // Glyphe 0 = .notdef
         var tables: [(tag: String, data: Data)] = []
 
@@ -124,7 +130,7 @@ public enum GlyphlessFont {
         tables.append(("hmtx", hmtx))
 
         // cmap (Format 4): zusammenhängende Bereiche → fortlaufende Glyphen
-        tables.append(("cmap", makeCmap()))
+        tables.append(("cmap", makeCmap(codepoints)))
 
         // loca (kurz) + glyf: alle Glyphen leer
         var loca = Data()
@@ -144,7 +150,7 @@ public enum GlyphlessFont {
         return assemble(tables)
     }
 
-    private static func makeCmap() -> Data {
+    private static func makeCmap(_ codepoints: [UInt32]) -> Data {
         // Segmente aus aufeinanderfolgenden Codepoints
         var segments: [(start: UInt16, end: UInt16, firstGlyph: UInt16)] = []
         for (i, cp) in codepoints.enumerated() {

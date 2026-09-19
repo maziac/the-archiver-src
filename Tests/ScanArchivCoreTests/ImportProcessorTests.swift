@@ -265,12 +265,20 @@ struct MetadataTests {
         meta.source = .pdf
         meta.originalFileName = "TK-Ausweis.pdf"
         meta.originalSize = 66_716
-        let grown = Dictionary(uniqueKeysWithValues: DocumentInfo.lines(meta: meta, fileSize: 80_239, pageCount: 1).map { ($0.label, $0.value) })
-        #expect(grown["Originaldatei"] == "TK-Ausweis.pdf (67 KB)")
-        #expect(grown["Dateigröße"] == "80 KB (Original 67 KB, +14 KB für Textebene, Stempel und Metadaten)")
+        meta.storage = .appended
+        meta.pages = [.ocr]
+        func lines(_ size: Int) -> [String: String] {
+            Dictionary(uniqueKeysWithValues: DocumentInfo.lines(meta: meta, fileSize: size, pageCount: 1).map { ($0.label, $0.value) })
+        }
+        #expect(lines(71_257)["Originaldatei"] == "TK-Ausweis.pdf (67 KB)")
+        #expect(lines(71_257)["Dateigröße"] == "71 KB (Original 67 KB, +5 KB: Stempel, OCR-Textebene, Metadaten angehängt)")
+        #expect(lines(71_257)["Speicherung"] == "Original unverändert, Zusätze angehängt")
+        // Textseiten: keine OCR-Ebene erwähnen
+        meta.pages = [.embedded]
+        #expect(lines(68_300)["Dateigröße"] == "68 KB (Original 67 KB, +2 KB: Stempel, Metadaten angehängt)")
+        meta.storage = .rebuilt
         meta.originalSize = 1_926_408
-        let shrunk = Dictionary(uniqueKeysWithValues: DocumentInfo.lines(meta: meta, fileSize: 178_148, pageCount: 1).map { ($0.label, $0.value) })
-        #expect(shrunk["Dateigröße"]?.contains("−1,7 MB durch Kompression") == true, "\(shrunk["Dateigröße"] ?? "")")
+        #expect(lines(178_148)["Dateigröße"]?.hasSuffix("−1,7 MB durch Kompression)") == true, "\(lines(178_148)["Dateigröße"] ?? "")")
     }
 
     @Test func textSourceWording() {

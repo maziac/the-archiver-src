@@ -108,14 +108,21 @@ Farbmodus: *Farbe/Original*, *Graustufen* oder *Schwarz-Weiß (1 Bit)*.
   100–200 KB, weil die Auflösung für die Lesbarkeit nicht unter 150 dpi sinkt. Für 80 oder 40 KB
   eignet sich **Schwarz-Weiß** (typisch 25–60 KB pro Textseite), das Fotos und Logos aber grob macht.
 
-### Warum ein importiertes PDF etwas größer werden kann
+### Importierte PDFs bleiben unverändert (inkrementelles Speichern)
 
-Ohne Kompression bleibt der Inhalt unverändert, es kommen aber Textebene, Stempel und Metadaten hinzu.
-Bei kleinen Dateien fällt das auf (Beispiel: eine eingescannte Karte, 67 KB → 80 KB). Um den Aufschlag
-klein zu halten, nutzt die unsichtbare Textebene eine von ScanArchiv erzeugte **Schrift ohne
-Zeichenformen**, wie sie auch OCRmyPDF verwendet: Suchen, Markieren und Kopieren funktionieren
-genauso, es wird aber kaum Schrift eingebettet (etwa 1–2 KB statt 15 KB). Die ⓘ-Info zeigt
-Original- und Archivgröße samt Differenz.
+ScanArchiv schreibt importierte PDFs nicht neu, sondern **hängt** Stempel, OCR-Textebene (nur für Bildseiten)
+und Metadaten per inkrementellem Update an das unveränderte Original an – ein Standardverfahren von PDF.
+So bleiben Bilder (z. B. CCITT-Fax-Scans), Schriften und Objekt-Streams bitgenau erhalten; der Aufschlag
+liegt typisch bei 2–6 KB. Beispiel: ein 6-seitiges Versicherungs-PDF mit CCITT-Scans wuchs früher beim
+Neuschreiben durch PDFKit um 533 KB, jetzt um etwa 3 KB.
+
+- Der Stempel nutzt die PDF-Standardschrift Helvetica-Bold (ohne Einbettung), die OCR-Ebene eine von
+  ScanArchiv erzeugte **Schrift ohne Zeichenformen** mit nur den benutzten Zeichen, wie bei OCRmyPDF.
+- Beim Import entstehen mehrere Fassungen: angehängt, durch PDFKit neu geschrieben und – bei aktiver
+  Kompression – mit neu erzeugten Bildseiten. Jede wird geprüft (Text aller Seiten, Stempel, Metadaten);
+  die **kleinste gültige** wird gespeichert. Welche es ist, steht in der Info unter „Speicherung“.
+- Auch spätere Änderungen (Bearbeiten, „Als geprüft“, „Titel erzeugen“) werden angehängt (unter 1 KB).
+- Die Info nennt bei „Dateigröße“ nur, was tatsächlich hinzukam, z. B. „+3 KB: Stempel, Metadaten angehängt“.
 
 ## Was im PDF gespeichert wird
 
