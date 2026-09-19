@@ -10,6 +10,8 @@ public struct DocumentRecord: Identifiable, Hashable, Sendable {
     public var pages: Int
     public var title: String
     public var summary: String
+    /// Probleme bei der Verarbeitung (leer = alles in Ordnung)
+    public var issues: [DocumentIssue] = []
     /// Textausschnitt; Treffer sind mit \u{1}…\u{2} markiert.
     public var snippet: String
 
@@ -17,6 +19,7 @@ public struct DocumentRecord: Identifiable, Hashable, Sendable {
     public var fileName: String { url.lastPathComponent }
     /// Titel oder, falls leer, der Dateiname
     public var displayTitle: String { title.isEmpty ? fileName : title }
+    public var hasIssues: Bool { !issues.isEmpty }
 }
 
 public enum SearchIndexError: LocalizedError {
@@ -30,7 +33,7 @@ public enum SearchIndexError: LocalizedError {
 /// Volltextindex (SQLite FTS5) über alle Archiv-PDFs.
 public final class SearchIndex: @unchecked Sendable {
     public static let fileName = ".scanarchiv-index.sqlite"
-    static let schemaVersion: Int32 = 2
+    static let schemaVersion: Int32 = 3
     private var db: OpaquePointer?
     private let lock = NSLock()
     private static let transient = unsafeBitCast(-1, to: sqlite3_destructor_type.self)
@@ -47,7 +50,7 @@ public final class SearchIndex: @unchecked Sendable {
         // number enthält "000123 123", damit auch Suchen ohne führende Nullen treffen.
         try exec("""
             CREATE VIRTUAL TABLE IF NOT EXISTS docs USING fts5(
-                number, date UNINDEXED, path UNINDEXED, pages UNINDEXED, title, summary, text,
+                number, date UNINDEXED, path UNINDEXED, pages UNINDEXED, issues UNINDEXED, title, summary, text,
                 tokenize = 'unicode61 remove_diacritics 2')
             """)
     }
@@ -60,11 +63,28 @@ public final class SearchIndex: @unchecked Sendable {
 
     // MARK: Schreiben
 
-    public func add(number: Int, date: Date, url: URL, pages: Int, text: String, title: String = "", summary: String = "") throws {
+    public func add(number: Int, date: Date, url: URL, pages: Int, text: String, title: String = "", summary: String = "",
+                    issues: [DocumentIssue] = []) throws {
         lock.lock(); defer { lock.unlock() }
         try run("DELETE FROM docs WHERE path = ?", [url.path])
-        try run("INSERT INTO docs(number, date, path, pages, title, summary, text) VALUES (?, ?, ?, ?, ?, ?, ?)",
-                ["\(Archive.formatNumber(number)) \(number)", date.timeIntervalSince1970, url.path, pages, title, summary, text])
+        try run("INSERT INTO docs(number, date, path, pages, issues, title, summary, text) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                [SearchIndex.numberField(number), date.timeIntervalSince1970, url.path, pages, DocumentIssue.encode(issues),
+                 title, summary, text])
+    }
+
+    public func setIssues(_ issues: [DocumentIssue], number: Int) throws {
+        lock.lock(); defer { lock.unlock() }
+        try run("UPDATE docs SET issues = ? WHERE number = ?", [DocumentIssue.encode(issues), SearchIndex.numberField(number)])
+    }
+
+    public func countWithIssues() throws -> Int {
+        lock.lock(); defer { lock.unlock() }
+        return try query("SELECT count(*) FROM docs WHERE issues != ''", []) { Int(sqlite3_column_int($0, 0)) }.first ?? 0
+    }
+
+    /// "000123 123", damit auch Suchen ohne führende Nullen treffen.
+    static func numberField(_ number: Int) -> String {
+        "\(Archive.formatNumber(number)) \(number)"
     }
 
     /// Nach Bearbeiten/Umbenennen: Pfad, Datum, Titel und Beschreibung aktualisieren.
@@ -98,7 +118,7 @@ public final class SearchIndex: @unchecked Sendable {
     }
 
     /// Nimmt ein vorhandenes PDF (Text via PDFKit) in den Index auf.
-    public func addExisting(_ url: URL) throws {
+    public func addExisting(_ url: URL, issues: [DocumentIssue] = []) throws {
         guard let pdf = PDFDocument(url: url) else { return }
         let parsed = Archive.parse(fileName: url.lastPathComponent)
         let date = parsed?.date
@@ -111,12 +131,12 @@ public final class SearchIndex: @unchecked Sendable {
         if title.wholeMatch(of: #/\d{4}-\d{2}-\d{2}_\d{6,}/#) != nil { title = "" }
         if summary.hasPrefix("Nr. ") { summary = "" }
         try add(number: parsed?.number ?? 0, date: date, url: url, pages: pdf.pageCount, text: pdf.string ?? "",
-                title: title, summary: summary)
+                title: title, summary: summary, issues: issues)
     }
 
     /// Gleicht den Index mit dem Ordner ab: neue PDFs aufnehmen, gelöschte entfernen.
-    /// Mit `full` wird alles neu eingelesen.
-    public func sync(folder: URL, full: Bool = false) throws {
+    /// Mit `full` wird alles neu eingelesen. `issues` liefert die gespeicherten Probleme je Nummer.
+    public func sync(folder: URL, full: Bool = false, issues: (Int) -> [DocumentIssue] = { _ in [] }) throws {
         let files = ((try? FileManager.default.contentsOfDirectory(at: folder, includingPropertiesForKeys: nil)) ?? [])
             .filter { $0.pathExtension.lowercased() == "pdf" }
         let onDisk = Set(files.map(\.path))
@@ -130,7 +150,7 @@ public final class SearchIndex: @unchecked Sendable {
             try run("DELETE FROM docs WHERE path = ?", [path])
         }
         for url in files where !indexed.contains(url.path) {
-            try addExisting(url)
+            try addExisting(url, issues: Archive.parse(fileName: url.lastPathComponent).map { issues($0.number) } ?? [])
         }
     }
 
@@ -138,9 +158,11 @@ public final class SearchIndex: @unchecked Sendable {
 
     /// Stichwortsuche: alle Wörter müssen vorkommen (UND), jeweils als Präfix.
     /// Leere Suche liefert alle Dokumente. Sortiert nach Nummer absteigend.
-    public func search(_ query: String, limit: Int = 1000) throws -> [DocumentRecord] {
+    /// `onlyIssues`: nur Dokumente mit Problemen.
+    public func search(_ query: String, onlyIssues: Bool = false, limit: Int = 1000) throws -> [DocumentRecord] {
         lock.lock(); defer { lock.unlock() }
         let match = SearchIndex.matchExpression(for: query)
+        let issueFilter = onlyIssues ? "issues != ''" : "1"
         let map: (OpaquePointer?) -> DocumentRecord = { stmt in
             let numberField = SearchIndex.text(stmt, 0)
             return DocumentRecord(
@@ -148,20 +170,21 @@ public final class SearchIndex: @unchecked Sendable {
                 date: Date(timeIntervalSince1970: sqlite3_column_double(stmt, 1)),
                 path: SearchIndex.text(stmt, 2),
                 pages: Int(sqlite3_column_int(stmt, 3)),
-                title: SearchIndex.text(stmt, 4),
-                summary: SearchIndex.text(stmt, 5),
-                snippet: SearchIndex.text(stmt, 6)
+                title: SearchIndex.text(stmt, 5),
+                summary: SearchIndex.text(stmt, 6),
+                issues: DocumentIssue.decode(SearchIndex.text(stmt, 4)),
+                snippet: SearchIndex.text(stmt, 7)
                     .replacingOccurrences(of: "\n", with: " "))
         }
         if let match {
             return try self.query("""
-                SELECT number, date, path, pages, title, summary, snippet(docs, 6, char(1), char(2), '…', 16)
-                FROM docs WHERE docs MATCH ? ORDER BY CAST(substr(number, 1, instr(number, ' ') - 1) AS INTEGER) DESC, path LIMIT ?
+                SELECT number, date, path, pages, issues, title, summary, snippet(docs, 7, char(1), char(2), '…', 16)
+                FROM docs WHERE docs MATCH ? AND \(issueFilter) ORDER BY CAST(substr(number, 1, instr(number, ' ') - 1) AS INTEGER) DESC, path LIMIT ?
                 """, [match, limit], map)
         }
         return try self.query("""
-            SELECT number, date, path, pages, title, summary, substr(text, 1, 160)
-            FROM docs ORDER BY CAST(substr(number, 1, instr(number, ' ') - 1) AS INTEGER) DESC, path LIMIT ?
+            SELECT number, date, path, pages, issues, title, summary, substr(text, 1, 160)
+            FROM docs WHERE \(issueFilter) ORDER BY CAST(substr(number, 1, instr(number, ' ') - 1) AS INTEGER) DESC, path LIMIT ?
             """, [limit], map)
     }
 

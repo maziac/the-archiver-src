@@ -25,16 +25,12 @@ public enum PDFStamper {
         }
     }
 
-    /// Mindestanzahl Buchstaben/Ziffern, ab der eine Seite als „hat Text“ gilt.
-    static let minTextCharacters = 10
-
     /// Text je Seite; leerer String = Seite ohne (nennenswerten) eigenen Text.
     public static func pageTexts(of url: URL) -> [String] {
         guard let pdf = PDFDocument(url: url) else { return [] }
         return (0..<pdf.pageCount).map { i in
             let text = pdf.page(at: i)?.string ?? ""
-            let significant = text.unicodeScalars.filter { CharacterSet.alphanumerics.contains($0) }.count
-            return significant >= minTextCharacters ? text : ""
+            return DocumentIssue.hasText(text) ? text : ""
         }
     }
 

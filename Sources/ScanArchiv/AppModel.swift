@@ -10,15 +10,22 @@ enum SettingsKey {
     static let color = "color"
     static let rotateBacks = "rotateBacks"
     static let jpegQuality = "jpegQuality"
+    static let inboxPath = "inboxPath"
 
     static var defaultArchivePath: String {
         FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("ScanArchiv").path
     }
 
+    static var defaultInboxPath: String {
+        FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("ScanArchiv-Eingang").path
+    }
+
     static func registerDefaults() {
         UserDefaults.standard.register(defaults: [
             archivePath: defaultArchivePath,
+            inboxPath: defaultInboxPath,
             dpi: 300,
             color: false,
             rotateBacks: false,
@@ -27,12 +34,19 @@ enum SettingsKey {
     }
 }
 
+enum AppTab: Hashable {
+    case scan, inbox, archive
+}
+
 /// Archivordner + Suchindex; wird neu aufgebaut, wenn sich der Archivordner ändert.
 @Observable
 @MainActor
 final class AppModel {
     private(set) var archive: Archive?
     private(set) var index: SearchIndex?
+    /// Probleme je Dokumentnummer (dauerhaft im Archivordner)
+    private(set) var issueStore: IssueStore?
+    var selectedTab: AppTab = .scan
     private(set) var error: String?
     /// Wird nach jedem gespeicherten Dokument / Reindex erhöht, damit die Suche neu lädt.
     private(set) var revision = 0
@@ -51,19 +65,21 @@ final class AppModel {
             let index = try SearchIndex(url: folder.appendingPathComponent(SearchIndex.fileName))
             self.archive = archive
             self.index = index
+            issueStore = IssueStore(folder: folder)
             error = nil
             reindex(full: false)
         } catch {
             self.archive = nil
             self.index = nil
+            issueStore = nil
             self.error = error.localizedDescription
         }
     }
 
     func reindex(full: Bool) {
-        guard let index, let archive else { return }
+        guard let index, let archive, let issueStore else { return }
         Task.detached(priority: .utility) {
-            try? index.sync(folder: archive.folder, full: full)
+            try? index.sync(folder: archive.folder, full: full) { issueStore.issues(for: $0) }
             await MainActor.run { self.revision += 1 }
         }
     }
@@ -73,7 +89,8 @@ final class AppModel {
     // MARK: Titel/Beschreibung/Datum bearbeiten
 
     /// Schreibt die Angaben ins PDF, benennt die Datei um und aktualisiert den Index.
-    func updateDocument(path: String, date: Date, title: String, summary: String) async throws {
+    /// Erledigte Probleme verschwinden: Titel gesetzt → `.noSuggestion`, Datum bestätigt/geändert → `.noDate`.
+    func updateDocument(path: String, date: Date, title: String, summary: String, dateConfirmed: Bool) async throws {
         guard let archive, let index else { return }
         let title = title.trimmingCharacters(in: .whitespacesAndNewlines)
         let summary = summary.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -81,7 +98,32 @@ final class AppModel {
             let newURL = try archive.updateMetadata(url: URL(fileURLWithPath: path), date: date, title: title, summary: summary)
             try index.update(oldPath: path, newURL: newURL, date: date, title: title, summary: summary)
         }.value
+        if let number = Archive.parse(fileName: URL(fileURLWithPath: path).lastPathComponent)?.number, let issueStore {
+            let remaining = try issueStore.remove(for: number) { issue in
+                switch issue {
+                case .noSuggestion: return !title.isEmpty
+                case .noDate: return dateConfirmed
+                case .noText: return false
+                }
+            }
+            try index.setIssues(remaining, number: number)
+        }
         revision += 1
+    }
+
+    /// „Als geprüft markieren“: alle Probleme der Dokumente entfernen.
+    func markReviewed(_ records: [DocumentRecord]) throws {
+        guard let index, let issueStore else { return }
+        for record in records where record.number > 0 {
+            try issueStore.set([], for: record.number)
+            try index.setIssues([], number: record.number)
+        }
+        revision += 1
+    }
+
+    var issueCount: Int {
+        _ = revision
+        return (try? index?.countWithIssues()) ?? 0
     }
 
     /// Legt Dokumente in den Papierkorb (wiederherstellbar) und nimmt sie aus dem Index.
@@ -147,7 +189,8 @@ final class AppModel {
                     let suggestion = try await Summarizer.suggest(for: text)
                     let fileName = URL(fileURLWithPath: record.path).lastPathComponent
                     let date = suggestion.date ?? Archive.parse(fileName: fileName)?.date ?? Date()
-                    try await updateDocument(path: record.path, date: date, title: suggestion.title, summary: suggestion.summary)
+                    try await updateDocument(path: record.path, date: date, title: suggestion.title, summary: suggestion.summary,
+                                             dateConfirmed: suggestion.date != nil)
                 } catch {
                     titleBatch?.failed += 1
                 }

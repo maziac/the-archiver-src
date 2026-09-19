@@ -9,7 +9,7 @@ Mac-App für beidseitige Dokumente mit einem Scanner, der über den Einzug nur e
 - Texterkennung mit Apple Vision (Deutsch/Englisch), erzeugt ein durchsuchbares PDF
 - schlägt **Datum, Titel und Kurzbeschreibung** vor. Das Datum kommt aus dem Text, Titel und Beschreibung erzeugt Apple Intelligence lokal. Ohne gefundenes Datum gilt das heutige.
 - Dateiname `JJJJ-MM-TT_NNNNNN_Titel.pdf` mit fortlaufender, eindeutiger Nummer
-- alternativ Import vorhandener PDFs oder Bilder über die Dateiauswahl oder per Drag & Drop
+- automatischer Import vorhandener PDFs/Bilder über einen überwachten Eingangsordner oder per Drag & Drop
 - Nummer als roter Stempel oben rechts auf Seite 1 und in den PDF-Metadaten (Stichwörter). Titel und Beschreibung stehen als PDF-Titel und PDF-Betreff im Dokument.
 - Archiv-Tab: Stichwortsuche in Text, Titel und Beschreibung (UND-verknüpft, Präfix, Umlaute egal) oder nach Nummer; Doppelklick öffnet das PDF
 
@@ -35,19 +35,40 @@ Icon neu erzeugen: `swift scripts/make_icon.swift`
    Oben stehen die Vorschläge für Datum, Titel und Beschreibung. Sie sind nach wenigen Sekunden da
    und lassen sich überschreiben. Dann **Speichern**.
 
-**Dateien statt Scan:** „Dateien importieren …“ wählen oder PDFs/Bilder in das Fenster ziehen.
-Jede Datei wird ein eigenes Dokument. Die Dateien erscheinen nacheinander in der Vorschau
-(„Datei 2 von 5“) mit „Speichern & weiter“ und „Überspringen“. **Alle restlichen automatisch speichern**
-übernimmt den Rest ohne Vorschau mit den Vorschlägen. Die Originaldateien bleiben unverändert.
+## Eingang (automatischer Import)
 
-- **PDFs** werden inhaltlich unverändert übernommen: Text, Bilder in Originalauflösung und Farbe, Links
-  und Lesezeichen bleiben erhalten. Hinzu kommen nur der rote Stempel auf Seite 1 und die Metadaten.
-  Seiten, die schon Text enthalten, werden nicht erneut erkannt. Seiten, die nur ein Bild sind, bekommen
-  eine unsichtbare OCR-Textebene über dem Originalbild.
-- **Bilder** werden in voller Auflösung zu einem einseitigen PDF.
+Vorhandene PDFs und Bilder werden vollautomatisch archiviert, ohne Vorschau:
 
-Für Titel, Beschreibung und Datum werden nur die **ersten zwei Seiten** verwendet. Der Vorschlag
-startet, sobald diese erkannt sind, die übrigen Seiten werden im Hintergrund erkannt.
+- **Tab „Eingang“:** Dateien auf die Fläche ziehen oder „Dateien auswählen …“ (auch ein Ziehen auf den
+  Scan-Tab landet hier). Die Dateien werden in den Eingangsordner **kopiert**; deine Originale bleiben.
+- **Eingangsordner** (Standard `~/Documents/ScanArchiv-Eingang`, änderbar in ⌘,): Was du dort hineinlegst,
+  wird automatisch verarbeitet, sowohl im laufenden Betrieb als auch beim nächsten Start der App.
+  Eine Datei wird erst übernommen, wenn sie 2 s lang unverändert ist (laufende Kopiervorgänge).
+- Die Dateien laufen **nacheinander** durch: Text (eingebettet oder per OCR) → Titel, Beschreibung, Datum →
+  Nummer, Stempel → Archiv. Danach wandert die Datei aus dem Eingang **in den Papierkorb**.
+- Nicht verarbeitbare Dateien (defekt, unbekanntes Format) kommen nach **`Eingang/Fehler`**.
+  Rechtsklick → „Erneut versuchen“ legt sie zurück in den Eingang.
+- Die Liste zeigt wartende, laufende und fertige Dateien. Ein Doppelklick öffnet das Ergebnis.
+  „Pause“ hält die Verarbeitung nach der aktuellen Datei an.
+
+PDFs bleiben dabei inhaltlich unverändert: Text, Bilder in Originalauflösung und Farbe, Links und
+Lesezeichen bleiben erhalten. Seiten mit eigenem Text werden nicht erneut erkannt; Seiten, die nur ein
+Bild sind, bekommen eine unsichtbare OCR-Textebene. Hinzu kommen nur der rote Stempel und die Metadaten.
+Für Titel, Beschreibung und Datum werden die ersten zwei Seiten verwendet.
+
+## Dokumente mit Problemen
+
+Lässt sich eine Datei zwar lesen, aber nicht vollständig verarbeiten, wird sie trotzdem archiviert und
+als „zu prüfen“ markiert:
+
+- **kein Text erkannt:** Die OCR fand auf einer Bild-Seite keinen Text.
+- **kein Titel/keine Beschreibung:** Apple Intelligence war nicht verfügbar oder hat abgelehnt.
+- **kein Datum gefunden:** Es gilt das Tagesdatum, auch im Dateinamen.
+
+Solche Dokumente erscheinen im Archiv **rot** mit ⚠︎, der Tooltip nennt die Gründe. Der Schalter
+**„Nur mit Problemen“** filtert sie, auch kombiniert mit der Suche. Die Markierung verschwindet, sobald
+du Titel bzw. Datum über „Bearbeiten …“ ergänzt, über „Titel erzeugen“ oder mit Rechtsklick →
+**„Als geprüft markieren“**. Die Vermerke liegen dauerhaft in `.scanarchiv-issues.json` im Archivordner.
 
 Im Archiv lassen sich Datum, Titel und Beschreibung per Rechtsklick → **Bearbeiten …** ändern. Die Datei
 wird dabei umbenannt. Der Stempel auf Seite 1 behält das Datum vom Speichern.
@@ -80,6 +101,7 @@ Archivordner (Standard `~/Documents/ScanArchiv`), Auflösung, Farbe/Graustufen, 
 | --- | --- |
 | `JJJJ-MM-TT_NNNNNN_Titel.pdf` | die Dokumente (Titel und Beschreibung auch in den PDF-Metadaten) |
 | `counter.json` | letzte vergebene Nummer |
+| `.scanarchiv-issues.json` | Problem-Vermerke je Dokumentnummer |
 | `.scanarchiv-index.sqlite` | Suchindex (SQLite FTS5), jederzeit per „Index neu aufbauen“ wiederherstellbar |
 
 Die nächste Nummer ist immer größer als der Zählerstand **und** größer als jede Nummer, die schon in

@@ -10,6 +10,7 @@ struct SearchView: View {
     @State private var editing: DocumentRecord?
     @State private var pendingDelete: [DocumentRecord] = []
     @State private var preview = PDFPreviewModel()
+    @State private var onlyIssues = false
     @State private var error: String?
 
     static let dateFormat: DateFormatter = {
@@ -29,6 +30,13 @@ struct SearchView: View {
                 Text("\(results.count) Dokument(e)")
                     .foregroundStyle(.secondary)
                     .monospacedDigit()
+                Toggle(isOn: $onlyIssues) {
+                    Label("Nur mit Problemen (\(model.issueCount))", systemImage: "exclamationmark.triangle")
+                }
+                .toggleStyle(.button)
+                .tint(.red)
+                .disabled(model.issueCount == 0 && !onlyIssues)
+                .help("Nur Dokumente zeigen, bei denen Texterkennung, Titel/Beschreibung oder Datum nicht geklappt haben")
                 Menu {
                     Button("Index neu aufbauen") { model.reindex(full: true) }
                     Button("Archivordner öffnen") {
@@ -57,11 +65,11 @@ struct SearchView: View {
         .onChange(of: selection) { _, _ in updatePreview() }
         .onChange(of: query) { _, _ in updatePreview() }
         .onChange(of: results) { _, _ in updatePreview() }
-        .task(id: "\(query)|\(model.revision)|\(model.archive?.folder.path ?? "")") {
+        .task(id: "\(query)|\(onlyIssues)|\(model.revision)|\(model.archive?.folder.path ?? "")") {
             try? await Task.sleep(for: .milliseconds(150))
             guard !Task.isCancelled, let index = model.index else { return }
             do {
-                results = try index.search(query).sorted(using: sortOrder)
+                results = try index.search(query, onlyIssues: onlyIssues).sorted(using: sortOrder)
                 error = nil
             } catch {
                 self.error = error.localizedDescription
@@ -75,15 +83,30 @@ struct SearchView: View {
 
     private var table: some View {
         Table(results, selection: $selection, sortOrder: $sortOrder) {
-            TableColumn("Nr.", value: \.number) { Text(Archive.formatNumber($0.number)).monospacedDigit() }
-                .width(64)
+            TableColumn("Nr.", value: \.number) { record in
+                HStack(spacing: 3) {
+                    if record.hasIssues {
+                        Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.red).font(.caption)
+                    }
+                    Text(Archive.formatNumber(record.number)).monospacedDigit()
+                        .foregroundStyle(record.hasIssues ? Color.red : Color.primary)
+                }
+            }
+            .width(78)
             TableColumn("Datum", value: \.date) { Text(Self.dateFormat.string(from: $0.date)).monospacedDigit() }
                 .width(80)
             TableColumn("Dokument") { record in
                 VStack(alignment: .leading, spacing: 2) {
                     Text(record.displayTitle)
                         .fontWeight(.semibold)
+                        .foregroundStyle(record.hasIssues ? Color.red : Color.primary)
                         .lineLimit(1)
+                    if record.hasIssues {
+                        Text(record.issues.map(\.message).joined(separator: " · "))
+                            .font(.caption)
+                            .foregroundStyle(.red)
+                            .lineLimit(1)
+                    }
                     if !record.summary.isEmpty {
                         Text(record.summary)
                             .foregroundStyle(.secondary)
@@ -115,6 +138,12 @@ struct SearchView: View {
             .disabled(ids.count != 1)
             Button("Im Finder zeigen") {
                 NSWorkspace.shared.activateFileViewerSelecting(ids.map { URL(fileURLWithPath: $0) })
+            }
+            let withIssues = results.filter { ids.contains($0.id) && $0.hasIssues }
+            if !withIssues.isEmpty {
+                Button("Als geprüft markieren") {
+                    do { try model.markReviewed(withIssues) } catch { self.error = error.localizedDescription }
+                }
             }
             Divider()
             Button(ids.count > 1 ? "\(ids.count) Dokumente löschen …" : "Löschen …", role: .destructive) {
@@ -196,7 +225,12 @@ struct SearchView: View {
 
     /// Tooltip: vollständiger Titel und die ganze Beschreibung
     private func tooltip(for record: DocumentRecord) -> String {
-        record.summary.isEmpty ? record.displayTitle : "\(record.displayTitle)\n\n\(record.summary)"
+        var parts = [record.displayTitle]
+        if !record.summary.isEmpty { parts.append(record.summary) }
+        if record.hasIssues {
+            parts.append("Zu prüfen:\n" + record.issues.map { "⚠︎ " + $0.message }.joined(separator: "\n"))
+        }
+        return parts.joined(separator: "\n\n")
     }
 
     private func open(_ ids: Set<DocumentRecord.ID>) {
@@ -295,7 +329,10 @@ private struct EditDocumentSheet: View {
         busy = true
         Task {
             do {
-                try await model.updateDocument(path: record.path, date: date, title: title, summary: summary)
+                // Datum gilt als bestätigt, wenn es geändert wurde
+                let dateChanged = !Calendar.current.isDate(date, inSameDayAs: record.date)
+                try await model.updateDocument(path: record.path, date: date, title: title, summary: summary,
+                                               dateConfirmed: dateChanged)
                 dismiss()
             } catch {
                 message = error.localizedDescription

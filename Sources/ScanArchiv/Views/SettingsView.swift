@@ -2,6 +2,8 @@ import SwiftUI
 
 struct SettingsView: View {
     @Environment(AppModel.self) private var model
+    @Environment(InboxService.self) private var inbox
+    @AppStorage(SettingsKey.inboxPath) private var inboxPath = SettingsKey.defaultInboxPath
     @AppStorage(SettingsKey.archivePath) private var archivePath = SettingsKey.defaultArchivePath
     @AppStorage(SettingsKey.dpi) private var dpi = 300
     @AppStorage(SettingsKey.color) private var color = false
@@ -14,9 +16,34 @@ struct SettingsView: View {
                 LabeledContent("Ordner") {
                     HStack {
                         Text(archivePath).lineLimit(1).truncationMode(.middle)
-                        Button("Wählen …") { chooseFolder() }
+                        Button("Wählen …") {
+                            if let path = chooseFolder(startingAt: archivePath) {
+                                archivePath = path
+                                model.openArchive()
+                                inbox.start()
+                            }
+                        }
                     }
                 }
+            }
+            Section {
+                LabeledContent("Eingangsordner") {
+                    HStack {
+                        Text(inboxPath).lineLimit(1).truncationMode(.middle)
+                        Button("Wählen …") {
+                            if let path = chooseFolder(startingAt: inboxPath) {
+                                inboxPath = path
+                                inbox.start()
+                            }
+                        }
+                    }
+                }
+            } header: {
+                Text("Eingang")
+            } footer: {
+                Text("Dateien in diesem Ordner werden automatisch archiviert und danach in den Papierkorb gelegt. Nicht verarbeitbare Dateien landen im Unterordner „Fehler“.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
             Section("Scan") {
                 Picker("Auflösung", selection: $dpi) {
@@ -39,15 +66,12 @@ struct SettingsView: View {
         .frame(width: 520)
     }
 
-    private func chooseFolder() {
+    private func chooseFolder(startingAt path: String) -> String? {
         let panel = NSOpenPanel()
         panel.canChooseDirectories = true
         panel.canChooseFiles = false
         panel.canCreateDirectories = true
-        panel.directoryURL = URL(fileURLWithPath: archivePath)
-        if panel.runModal() == .OK, let url = panel.url {
-            archivePath = url.path
-            model.openArchive()
-        }
+        panel.directoryURL = URL(fileURLWithPath: path)
+        return panel.runModal() == .OK ? panel.url?.path : nil
     }
 }
