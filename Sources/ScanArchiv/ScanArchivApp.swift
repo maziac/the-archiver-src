@@ -36,13 +36,23 @@ struct ScanArchivApp: App {
                     .tag(AppTab.scan)
                 InboxView()
                     .tabItem { Label("Eingang", systemImage: "tray.and.arrow.down") }
-                    .badge(inbox.waitingCount + inbox.processingCount)
+                    .badge(inbox.waitingCount + inbox.processingCount + inbox.failedCount)
                     .tag(AppTab.inbox)
                 SearchView()
                     .tabItem { Label("Archiv", systemImage: "magnifyingglass") }
                     .tag(AppTab.archive)
             }
             .frame(minWidth: 900, minHeight: 600)
+            // Dialoge hängen am Fenster, damit sie auch bei Ablage im Archiv oder beim Scannen erscheinen
+            .sheet(isPresented: Binding(get: { !inbox.pendingFolders.isEmpty }, set: { if !$0 { inbox.pendingFolders = [] } })) {
+                FolderImportSheet(folders: inbox.pendingFolders) { files in inbox.add(files: files) }
+            }
+            .sheet(isPresented: Binding(get: { !inbox.pendingImages.isEmpty }, set: { if !$0 { inbox.pendingImages = [] } })) {
+                let images = inbox.pendingImages
+                MultipleImagesSheet(images: images,
+                                    onCombine: { inbox.addCombined(images: images) },
+                                    onSeparate: { inbox.add(files: images) })
+            }
             .environment(model)
             .environment(inbox)
         }

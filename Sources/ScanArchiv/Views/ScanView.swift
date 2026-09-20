@@ -7,8 +7,6 @@ struct ScanView: View {
     @Environment(AppModel.self) private var model
     @Environment(InboxService.self) private var inbox
 
-    @State private var dropTargeted = false
-
     private var scanner: ScannerService { session.scanner }
 
 
@@ -87,19 +85,7 @@ struct ScanView: View {
             } footer: {
                 sourcePicker
             }
-            .dropDestination(for: URL.self) { urls, _ in
-                guard !urls.isEmpty else { return false }
-                inbox.accept(urls)  // läuft automatisch über den Eingang (Ordner mit Auswahldialog)
-                model.selectedTab = .inbox
-                return true
-            } isTargeted: { dropTargeted = $0 }
-            .overlay {
-                if dropTargeted {
-                    RoundedRectangle(cornerRadius: 12)
-                        .strokeBorder(Color.accentColor, style: StrokeStyle(lineWidth: 3, dash: [8]))
-                        .padding(8)
-                }
-            }
+            .importDrop(inbox) { model.selectedTab = .inbox }  // beim Scannen sieht man den Fortschritt sonst nicht
 
         case .scanningFronts, .scanningBacks, .scanningSingle:
             VStack(spacing: 16) {

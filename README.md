@@ -48,6 +48,12 @@ erkennbaren Text bleiben unverändert. Abschaltbar in den Einstellungen.
 
 ## Eingang (automatischer Import)
 
+Dateien, Bilder und Ordner lassen sich **in jedem Tab** ablegen – auch direkt im Archiv. Läuft eine
+Verarbeitung, zeigt das Archiv oben eine Leiste mit Fortschritt; danach steht dort „3 Dokumente
+archiviert“ mit **Anzeigen** (hebt Suche und Tags auf, sortiert nach Nummer und markiert die neuen
+Zeilen mit „neu“), **Eingang zeigen** bei Fehlern oder Duplikaten und **Ausblenden**. Der Tab „Eingang“
+trägt währenddessen ein Abzeichen.
+
 Vorhandene PDFs und Bilder werden vollautomatisch archiviert, ohne Vorschau:
 
 - **Tab „Eingang“:** Dateien auf die Fläche ziehen oder „Dateien oder Ordner auswählen …“ (auch ein Ziehen auf

@@ -37,6 +37,23 @@ final class InboxService {
     }
 
     private(set) var items: [Item] = []
+
+    /// Ergebnis eines Durchlaufs der Warteschlange – für die Statusleiste im Archiv.
+    struct Batch: Equatable {
+        var archivedPaths: [String] = []
+        var failed = 0
+        var duplicates = 0
+        var finishedAt: Date?
+
+        var total: Int { archivedPaths.count + failed + duplicates }
+    }
+
+    /// läuft gerade
+    private(set) var currentBatch: Batch?
+    /// zuletzt fertig geworden (bis der Benutzer es ausblendet)
+    private(set) var lastBatch: Batch?
+
+    func dismissLastBatch() { lastBatch = nil }
     /// Dateien, die gerade in den Eingang kopiert werden (noch nicht stabil)
     private(set) var arriving: [String] = []
     private(set) var isPaused = false
@@ -316,6 +333,8 @@ final class InboxService {
                 }
                 removeFromInbox(url)
                 update(id) { $0.state = .done(result) }
+                currentBatch = (currentBatch ?? Batch())
+                currentBatch?.archivedPaths.append(result.url.path)
                 model.didSave()
                 Self.log.info("Archiviert: \(url.lastPathComponent, privacy: .public) → \(result.url.lastPathComponent, privacy: .public)")
             } catch let ImportError.duplicate(number, path) {
@@ -330,6 +349,8 @@ final class InboxService {
                     $0.url = target
                     $0.state = .duplicate(number: number, archived: URL(fileURLWithPath: path))
                 }
+                currentBatch = (currentBatch ?? Batch())
+                currentBatch?.duplicates += 1
                 Self.log.info("Duplikat: \(url.lastPathComponent, privacy: .public) = Nr. \(number)")
             } catch {
                 var target = url
@@ -341,8 +362,16 @@ final class InboxService {
                     $0.url = target
                     $0.state = .failed(error.localizedDescription)
                 }
+                currentBatch = (currentBatch ?? Batch())
+                currentBatch?.failed += 1
                 Self.log.error("Fehler bei \(url.lastPathComponent, privacy: .public): \(error.localizedDescription, privacy: .public)")
             }
+        }
+        // Durchlauf beendet: Ergebnis für die Statusleiste merken
+        if var batch = currentBatch {
+            batch.finishedAt = Date()
+            lastBatch = batch
+            currentBatch = nil
         }
     }
 

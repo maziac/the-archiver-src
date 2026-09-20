@@ -6,7 +6,6 @@ import UniformTypeIdentifiers
 struct InboxView: View {
     @Environment(InboxService.self) private var inbox
     @Environment(AppModel.self) private var model
-    @State private var dropTargeted = false
     @State private var selection = Set<InboxService.Item.ID>()
 
     var body: some View {
@@ -20,15 +19,7 @@ struct InboxView: View {
             Divider()
             footer
         }
-        .sheet(isPresented: Binding(get: { !inbox.pendingFolders.isEmpty }, set: { if !$0 { inbox.pendingFolders = [] } })) {
-            FolderImportSheet(folders: inbox.pendingFolders) { files in inbox.add(files: files) }
-        }
-        .sheet(isPresented: Binding(get: { !inbox.pendingImages.isEmpty }, set: { if !$0 { inbox.pendingImages = [] } })) {
-            let images = inbox.pendingImages
-            MultipleImagesSheet(images: images,
-                                onCombine: { inbox.addCombined(images: images) },
-                                onSeparate: { inbox.add(files: images) })
-        }
+        .importDrop(inbox)
     }
 
     // MARK: Ablagefläche
@@ -49,17 +40,11 @@ struct InboxView: View {
         }
         .frame(maxWidth: .infinity)
         .padding(.vertical, 22)
-        .background(RoundedRectangle(cornerRadius: 12).fill(dropTargeted ? Color.accentColor.opacity(0.08) : Color.secondary.opacity(0.05)))
+        .background(RoundedRectangle(cornerRadius: 12).fill(Color.secondary.opacity(0.05)))
         .overlay(
             RoundedRectangle(cornerRadius: 12)
-                .strokeBorder(dropTargeted ? Color.accentColor : Color.secondary.opacity(0.35),
-                              style: StrokeStyle(lineWidth: dropTargeted ? 3 : 1.5, dash: [8]))
+                .strokeBorder(Color.secondary.opacity(0.35), style: StrokeStyle(lineWidth: 1.5, dash: [8]))
         )
-        .dropDestination(for: URL.self) { urls, _ in
-            guard !urls.isEmpty else { return false }
-            inbox.accept(urls)  // Dateien sofort, Ordner über den Dialog
-            return true
-        } isTargeted: { dropTargeted = $0 }
     }
 
     private func chooseFiles() {

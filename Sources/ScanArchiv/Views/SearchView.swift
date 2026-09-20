@@ -3,7 +3,10 @@ import SwiftUI
 
 struct SearchView: View {
     @Environment(AppModel.self) private var model
+    @Environment(InboxService.self) private var inbox
     @State private var query = ""
+    /// gerade importierte Dokumente – in der Liste mit „neu“ markiert
+    @State private var newPaths: Set<String> = []
     @State private var results: [DocumentRecord] = []
     @State private var selection = Set<DocumentRecord.ID>()
     @State private var sortOrder = [KeyPathComparator(\DocumentRecord.number, order: .reverse)]
@@ -28,6 +31,8 @@ struct SearchView: View {
 
     var body: some View {
         VStack(spacing: 0) {
+            ImportStatusBar(newPaths: $newPaths, query: $query, activeTags: $activeTags,
+                            onlyIssues: $onlyIssues, sortOrder: $sortOrder)
             tagBar
             HStack {
                 Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
@@ -70,6 +75,7 @@ struct SearchView: View {
                     .frame(minWidth: 320, idealWidth: 480, maxHeight: .infinity)
             }
         }
+        .importDrop(inbox)  // PDFs, Bilder und Ordner lassen sich auch hier ablegen
         // Vorschau folgt der Auswahl; Suchbegriff aus dem Archiv ist die Voreinstellung
         .onChange(of: selection) { _, _ in updatePreview() }
         .onChange(of: query) { _, _ in updatePreview() }
@@ -102,6 +108,8 @@ struct SearchView: View {
             if !Task.isCancelled { tagCounts = counts }
         }
         .onChange(of: model.tags) { _, tags in activeTags.formIntersection(tags.map(\.id)) }
+        // Markierung „neu“ gilt nur für die Liste, die „Anzeigen“ eingestellt hat
+        .onChange(of: "\(query)|\(activeTags.map(\.uuidString).sorted().joined())|\(onlyIssues)") { _, _ in newPaths = [] }
         .sheet(item: $editingTag) { tag in TagEditorSheet(tag: tag) }
         .sheet(isPresented: $creatingTag) { TagEditorSheet(tag: nil) }
         .onChange(of: sortOrder) { _, order in results.sort(using: order) }
@@ -119,6 +127,14 @@ struct SearchView: View {
         Table(results, selection: $selection, sortOrder: $sortOrder) {
             TableColumn("Nr.", value: \.number) { record in
                 HStack(spacing: 3) {
+                    if newPaths.contains(record.path) {
+                        Text("neu")
+                            .font(.caption2.weight(.semibold))
+                            .foregroundStyle(.white)
+                            .padding(.horizontal, 4)
+                            .padding(.vertical, 1)
+                            .background(Capsule().fill(Color.accentColor))
+                    }
                     if record.hasIssues {
                         Image(systemName: record.issues.symbol).foregroundStyle(record.issues.color).font(.caption)
                     }
@@ -360,6 +376,85 @@ struct SearchView: View {
 }
 
 /// Datum, Titel und Beschreibung eines archivierten Dokuments bearbeiten.
+/// Zeigt im Archiv, was der Eingang gerade tut, und bietet die frisch archivierten Dokumente an.
+private struct ImportStatusBar: View {
+    @Environment(InboxService.self) private var inbox
+    @Environment(AppModel.self) private var model
+    @Binding var newPaths: Set<String>
+    @Binding var query: String
+    @Binding var activeTags: Set<UUID>
+    @Binding var onlyIssues: Bool
+    @Binding var sortOrder: [KeyPathComparator<DocumentRecord>]
+
+    private var busy: Bool { inbox.waitingCount + inbox.processingCount > 0 || inbox.copying != nil }
+
+    var body: some View {
+        if busy {
+            bar(color: .accentColor) {
+                ProgressView(value: progress).progressViewStyle(.linear).frame(width: 120)
+                Text(runningText).monospacedDigit()
+                Spacer()
+                Button("Eingang zeigen") { model.selectedTab = .inbox }
+            }
+        } else if let batch = inbox.lastBatch, batch.total > 0 {
+            bar(color: batch.failed > 0 ? .red : (batch.duplicates > 0 ? .orange : .accentColor)) {
+                Image(systemName: batch.failed > 0 ? "exclamationmark.triangle.fill" : "checkmark.circle.fill")
+                    .foregroundStyle(batch.failed > 0 ? Color.red : (batch.duplicates > 0 ? .orange : .green))
+                Text(doneText(batch))
+                Spacer()
+                if !batch.archivedPaths.isEmpty {
+                    Button("Anzeigen") { show(batch) }
+                }
+                if batch.failed + batch.duplicates > 0 {
+                    Button("Eingang zeigen") { model.selectedTab = .inbox }
+                }
+                Button("Ausblenden") { inbox.dismissLastBatch() }
+            }
+        }
+    }
+
+    private func bar<Content: View>(color: Color, @ViewBuilder content: () -> Content) -> some View {
+        HStack(spacing: 10) { content() }
+            .font(.callout)
+            .controlSize(.small)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 6)
+            .frame(maxWidth: .infinity)
+            .background(color.opacity(0.10))
+    }
+
+    private var done: Int { inbox.currentBatch?.total ?? 0 }
+    private var total: Int { done + inbox.waitingCount + inbox.processingCount }
+    private var progress: Double { total == 0 ? 0 : Double(done) / Double(total) }
+
+    private var runningText: String {
+        var parts: [String] = []
+        if let copying = inbox.copying { parts.append("kopiere \(copying.done) von \(copying.total)") }
+        parts.append("Import: \(done) von \(total)")
+        if let batch = inbox.currentBatch, batch.failed > 0 { parts.append("\(batch.failed) Fehler") }
+        return parts.joined(separator: " · ")
+    }
+
+    private func doneText(_ batch: InboxService.Batch) -> String {
+        var parts: [String] = []
+        let n = batch.archivedPaths.count
+        if n > 0 { parts.append(n == 1 ? "1 Dokument archiviert" : "\(n) Dokumente archiviert") }
+        if batch.duplicates > 0 { parts.append("\(batch.duplicates) Duplikat(e)") }
+        if batch.failed > 0 { parts.append("\(batch.failed) Fehler") }
+        return parts.joined(separator: " · ")
+    }
+
+    /// Filter aufheben, nach Nummer sortieren und die neuen Dokumente markieren.
+    private func show(_ batch: InboxService.Batch) {
+        query = ""
+        activeTags.removeAll()
+        onlyIssues = false
+        sortOrder = [KeyPathComparator(\DocumentRecord.number, order: .reverse)]
+        newPaths = Set(batch.archivedPaths)
+        inbox.dismissLastBatch()
+    }
+}
+
 private struct EditDocumentSheet: View {
     let record: DocumentRecord
     @Environment(AppModel.self) private var model
