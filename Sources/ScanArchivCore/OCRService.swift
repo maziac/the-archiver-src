@@ -6,6 +6,20 @@ import Vision
 public struct OCRLine: Sendable, Equatable {
     public var text: String
     public var box: CGRect
+    /// Lage der einzelnen Wörter (gleiche Normierung); leer = unbekannt, dann wird die Zeile als Ganzes gesetzt.
+    public var words: [OCRWord]
+
+    public init(text: String, box: CGRect, words: [OCRWord] = []) {
+        self.text = text
+        self.box = box
+        self.words = words
+    }
+}
+
+/// Ein Wort einer `OCRLine` mit seiner Lage.
+public struct OCRWord: Sendable, Equatable {
+    public var text: String
+    public var box: CGRect
 
     public init(text: String, box: CGRect) {
         self.text = text
@@ -110,7 +124,22 @@ public enum OCRService {
         try VNImageRequestHandler(cgImage: image, options: [:]).perform([request])
         return (request.results ?? []).compactMap { observation in
             guard let candidate = observation.topCandidates(1).first else { return nil }
-            return OCRLine(text: candidate.string, box: observation.boundingBox)
+            return OCRLine(text: candidate.string, box: observation.boundingBox, words: words(of: candidate))
         }
+    }
+
+    /// Wörter mit ihren Rahmen. Ohne sie läge die Textebene nur zeilenweise richtig: Suchtreffer würden
+    /// innerhalb der Zeile verschoben markiert, sobald die Schrift des Dokuments anders läuft als die Textebene.
+    private static func words(of candidate: VNRecognizedText) -> [OCRWord] {
+        let text = candidate.string
+        var words: [OCRWord] = []
+        var start = text.startIndex
+        while let wordStart = text[start...].firstIndex(where: { !$0.isWhitespace }) {
+            let wordEnd = text[wordStart...].firstIndex(where: \.isWhitespace) ?? text.endIndex
+            guard let box = try? candidate.boundingBox(for: wordStart..<wordEnd)?.boundingBox else { return [] }
+            words.append(OCRWord(text: String(text[wordStart..<wordEnd]), box: box))
+            start = wordEnd
+        }
+        return words
     }
 }

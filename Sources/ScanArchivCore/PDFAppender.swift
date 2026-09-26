@@ -292,16 +292,14 @@ public enum PDFAppender {
 
     static func invisibleText(_ lines: [OCRLine], pageSize: CGSize, gids: [UInt32: Int], codepoints: [UInt32]) -> String {
         var ops = "BT 3 Tr\n"
-        for line in lines {
-            let scalars = line.text.unicodeScalars.map(\.value).filter { gids[$0] != nil }
+        for run in lines.flatMap({ PDFBuilder.textRuns($0, pageSize: pageSize) }) {
+            let scalars = run.text.unicodeScalars.map(\.value).filter { gids[$0] != nil }
             guard !scalars.isEmpty else { continue }
-            let rect = CGRect(x: line.box.minX * pageSize.width, y: line.box.minY * pageSize.height,
-                              width: line.box.width * pageSize.width, height: line.box.height * pageSize.height)
-            guard rect.width > 0, rect.height > 0 else { continue }
+            let rect = run.rect
             let units = scalars.reduce(0.0) { $0 + Double(GlyphlessFont.advance(for: $1)) } / 1000
             var fontSize = Double(rect.height) * 0.85
-            // zu schmale Zeile: Schrift verkleinern statt stauchen (sonst liest PDFKit „E U R O …“)
-            if Double(rect.width) < units * fontSize * 0.95 { fontSize = Double(rect.width) / units }
+            // zu schmales Wort: Schrift verkleinern statt stauchen (sonst liest PDFKit „E U R O …“)
+            if !run.isSpace, Double(rect.width) < units * fontSize * 0.95 { fontSize = Double(rect.width) / units }
             let scale = Double(rect.width) / (units * fontSize) * 100
             let hex = scalars.map { String(format: "%04X", gids[$0]!) }.joined()
             ops += "/\(textFontName) \(PDFValue.format(fontSize)) Tf \(PDFValue.format(scale)) Tz "

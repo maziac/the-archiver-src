@@ -115,32 +115,71 @@ public enum PDFBuilder {
     static func drawInvisibleText(_ lines: [OCRLine], in ctx: CGContext, pageSize: CGSize) {
         ctx.saveGState()
         ctx.setTextDrawingMode(.invisible)
-        for line in lines where !line.text.isEmpty {
-            let rect = CGRect(x: line.box.minX * pageSize.width, y: line.box.minY * pageSize.height,
-                              width: line.box.width * pageSize.width, height: line.box.height * pageSize.height)
-            guard rect.width > 0, rect.height > 0 else { continue }
-            drawInvisible(line.text, in: rect, ctx: ctx)
+        for line in lines {
+            for run in textRuns(line, pageSize: pageSize) {
+                drawInvisible(run.text, in: run.rect, squeezable: run.isSpace, ctx: ctx)
+            }
         }
         ctx.restoreGState()
     }
 
+    /// Ein Stück der unsichtbaren Textebene mit seinem Zielrahmen in Punkt.
+    struct TextRun: Equatable {
+        var text: String
+        var rect: CGRect
+        /// Leerzeichen zwischen zwei Wörtern: füllt genau die Lücke, darf dafür beliebig gestaucht werden.
+        var isSpace = false
+    }
+
+    /// Zerlegt eine Zeile in Wörter an ihren erkannten Stellen und Leerzeichen, die die Lücken dazwischen
+    /// füllen – so markiert ein Suchtreffer genau das Wort im Bild und der ausgelesene Text behält seine
+    /// Leerzeichen. Ohne Wortrahmen wird die ganze Zeile auf ihren Rahmen gestreckt.
+    /// Gemeinsame Quelle für `drawInvisibleText` und `PDFAppender`.
+    static func textRuns(_ line: OCRLine, pageSize: CGSize) -> [TextRun] {
+        guard !line.text.isEmpty else { return [] }
+        let lineRect = CGRect(x: line.box.minX * pageSize.width, y: line.box.minY * pageSize.height,
+                              width: line.box.width * pageSize.width, height: line.box.height * pageSize.height)
+        guard lineRect.width > 0, lineRect.height > 0 else { return [] }
+        let words = line.words.filter { !$0.text.isEmpty && $0.box.width > 0 }
+        guard !words.isEmpty else { return [TextRun(text: line.text, rect: lineRect)] }
+
+        var runs: [TextRun] = []
+        var previousEnd: CGFloat?
+        for word in words {
+            let minX = max(word.box.minX * pageSize.width, previousEnd ?? -.infinity)
+            let maxX = max(word.box.maxX * pageSize.width, minX + 0.1)
+            if let previousEnd {
+                runs.append(TextRun(text: " ", rect: CGRect(x: previousEnd, y: lineRect.minY,
+                                                            width: max(minX - previousEnd, 0.1), height: lineRect.height),
+                                    isSpace: true))
+            }
+            runs.append(TextRun(text: word.text, rect: CGRect(x: minX, y: lineRect.minY, width: maxX - minX, height: lineRect.height)))
+            previousEnd = maxX
+        }
+        return runs
+    }
+
     /// Unsichtbarer Text in der Schrift ohne Zeichenformen, horizontal auf `rect` gestreckt
     /// (damit Markieren im Viewer zur sichtbaren Schrift passt). Aufrufer setzt den Zeichenmodus.
-    private static func drawInvisible(_ text: String, in rect: CGRect, ctx: CGContext) {
-        func line(size: CGFloat) -> (CTLine, CGFloat) {
+    private static func drawInvisible(_ text: String, in rect: CGRect, squeezable: Bool, ctx: CGContext) {
+        func width(size: CGFloat, xScale: CGFloat = 1) -> (CTLine, CGFloat) {
             let l = CTLineCreateWithAttributedString(NSAttributedString(string: text, attributes: [
-                .init(kCTFontAttributeName as String): GlyphlessFont.font(size: size)]))
+                .init(kCTFontAttributeName as String): GlyphlessFont.font(size: size, xScale: xScale)]))
             return (l, CGFloat(CTLineGetTypographicBounds(l, nil, nil, nil)))
         }
-        var (ctLine, textWidth) = line(size: rect.height * 0.85)
+        var size = rect.height * 0.85
+        let textWidth = width(size: size).1
         guard textWidth > 0 else { return }
-        // Zu schmale Zeile: Schrift verkleinern statt stauchen – gestauchter Text wird von PDFKit
+        var xScale = rect.width / textWidth
+        // Zu schmales Stück: Schrift verkleinern statt stauchen – gestauchter Text wird von PDFKit
         // sonst mit Leerzeichen zwischen den Buchstaben ausgelesen („E U R O …“).
-        if rect.width < textWidth * 0.95 {
-            (ctLine, textWidth) = line(size: rect.height * 0.85 * rect.width / textWidth)
-            guard textWidth > 0 else { return }
+        if !squeezable, xScale < 0.95 {
+            size *= xScale
+            xScale = 1
         }
-        ctx.textMatrix = CGAffineTransform(scaleX: rect.width / textWidth, y: 1)
+        let (ctLine, drawnWidth) = width(size: size, xScale: xScale)
+        guard drawnWidth > 0 else { return }
+        ctx.textMatrix = .identity
         ctx.textPosition = CGPoint(x: rect.minX, y: rect.minY + rect.height * 0.15)
         CTLineDraw(ctLine, ctx)
     }

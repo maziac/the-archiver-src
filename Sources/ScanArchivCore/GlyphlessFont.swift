@@ -9,7 +9,9 @@ import Foundation
 /// (Gleiches Prinzip wie die „GlyphLessFont“ von OCRmyPDF/Tesseract.)
 ///
 /// Jedes unterstützte Zeichen bekommt eine eigene Glyphe (sonst wäre der Text beim Auslesen nicht
-/// eindeutig). Zeichen außerhalb des Zeichenvorrats übernimmt CoreText mit einer Ersatzschrift.
+/// eindeutig). Die Glyphen sind nicht ganz leer: eine Linie ohne Fläche über die Zeichenbreite gibt
+/// ihnen einen Umriss-Rahmen, aus dem PDFKit die Zeichengrenzen für Markierungen ableitet – ohne ihn
+/// legt PDFKit die Grenzen in die Mitte zwischen zwei Zeichen, und Suchtreffer rutschen nach links. Zeichen außerhalb des Zeichenvorrats übernimmt CoreText mit einer Ersatzschrift.
 public enum GlyphlessFont {
     static let postScriptName = "ScanArchivGlyphless"
     static let unitsPerEm: UInt16 = 1000
@@ -63,13 +65,16 @@ public enum GlyphlessFont {
     private static let lock = NSLock()
 
     /// Die Schrift in der gewünschten Größe.
-    public static func font(size: CGFloat) -> CTFont {
+    /// - xScale: horizontale Streckung. Gehört in die Schrift, nicht in die Textmatrix des Kontexts –
+    ///   dort würden nur die Glyphen breiter, CoreText setzte sie aber weiter mit ungestreckten Abständen.
+    public static func font(size: CGFloat, xScale: CGFloat = 1) -> CTFont {
         lock.lock(); defer { lock.unlock() }
         if descriptor == nil {
             descriptor = CTFontManagerCreateFontDescriptorFromData(makeFontData() as CFData)
         }
-        guard let descriptor else { return CTFontCreateWithName("Helvetica" as CFString, size, nil) }
-        return CTFontCreateWithFontDescriptor(descriptor, size, nil)
+        var matrix = CGAffineTransform(scaleX: xScale, y: 1)
+        guard let descriptor else { return CTFontCreateWithName("Helvetica" as CFString, size, &matrix) }
+        return CTFontCreateWithFontDescriptor(descriptor, size, &matrix)
     }
 
     // MARK: TrueType-Erzeugung
@@ -87,7 +92,7 @@ public enum GlyphlessFont {
         head.u32(0x5F0F_3CF5)                           // magicNumber
         head.u16(0x000B); head.u16(unitsPerEm)          // flags, unitsPerEm
         head.u64(0); head.u64(0)                        // created, modified
-        head.i16(0); head.i16(-200); head.i16(Int16(advance)); head.i16(800)  // xMin, yMin, xMax, yMax
+        head.i16(0); head.i16(-200); head.i16(Int16(advances.max() ?? advance)); head.i16(800)  // xMin, yMin, xMax, yMax
         head.u16(0); head.u16(8); head.i16(2)           // macStyle, lowestRecPPEM, fontDirectionHint
         head.i16(0); head.i16(0)                        // indexToLocFormat (short), glyphDataFormat
         tables.append(("head", head))
@@ -105,7 +110,7 @@ public enum GlyphlessFont {
         // maxp (TrueType, Version 1.0)
         var maxp = Data()
         maxp.u32(0x0001_0000); maxp.u16(numGlyphs)
-        for value: UInt16 in [0, 0, 0, 0, 2, 0, 0, 0, 0, 0, 0, 0, 0] { maxp.u16(value) }
+        for value: UInt16 in [2, 1, 0, 0, 2, 0, 0, 0, 0, 0, 0, 0, 0] { maxp.u16(value) }
         tables.append(("maxp", maxp))
 
         // OS/2 (Version 4) – fsType 0: Einbetten erlaubt
@@ -132,11 +137,24 @@ public enum GlyphlessFont {
         // cmap (Format 4): zusammenhängende Bereiche → fortlaufende Glyphen
         tables.append(("cmap", makeCmap(codepoints)))
 
-        // loca (kurz) + glyf: alle Glyphen leer
+        // loca (kurz) + glyf: .notdef leer, jedes Zeichen eine Linie ohne Fläche von (0, -200) nach
+        // (Breite, 800) – füllt nichts, legt aber den Rahmen der Glyphe fest
         var loca = Data()
-        for _ in 0...Int(numGlyphs) { loca.u16(0) }
+        var glyf = Data()
+        loca.u16(0)
+        for width in advances {
+            loca.u16(UInt16(glyf.count / 2))
+            glyf.i16(1)                                                   // numberOfContours
+            glyf.i16(0); glyf.i16(-200); glyf.i16(Int16(width)); glyf.i16(800)  // xMin, yMin, xMax, yMax
+            glyf.u16(1); glyf.u16(0)                                      // endPtsOfContours, instructionLength
+            glyf.append(contentsOf: [0x01, 0x01])                         // Flags: auf der Kurve, 16-Bit-Deltas
+            glyf.i16(0); glyf.i16(Int16(width))                           // x-Deltas
+            glyf.i16(-200); glyf.i16(1000)                                // y-Deltas
+        }
+        precondition(glyf.count / 2 <= Int(UInt16.max), "glyf zu groß für kurze loca")
+        loca.u16(UInt16(glyf.count / 2))
         tables.append(("loca", loca))
-        tables.append(("glyf", Data(count: 4)))
+        tables.append(("glyf", glyf))
 
         // name
         tables.append(("name", makeName()))
