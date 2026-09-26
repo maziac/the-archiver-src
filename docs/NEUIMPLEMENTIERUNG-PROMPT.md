@@ -88,7 +88,8 @@ unknown), `titleSource` (ai, manual, none), `titleUpdated`, `archivedAt`, `sourc
 (Stufe, Farbmodus, angewendet ja/nein, Größen), `pages: [TextSource]` (embedded, ocr, none, blank,
 unknown), `ocr` (Engine, Sprachen, Datum), `issues: [DocumentIssue]`, `app` (Erstellversion),
 `updatedWith` (letzte Änderung), `storage` (appended, rewritten, rebuilt, created), `pageOrder: [Int]?`
-(beim Import umsortiert: Originalindizes in neuer Reihenfolge).
+(beim Import umsortiert: Originalindizes in neuer Reihenfolge), `categories: [String]?` (Pfade mit „/“, z. B.
+`Absender/DAK`, `Rechnung`; nil = noch nicht kategorisiert, [] = keine).
 
 ### 3.5 `DocumentIssue` (Codable, mit Schweregrad)
 | Fall | Meldung | Schwere |
@@ -278,7 +279,25 @@ Auf der Startseite kann man außerdem Dateien ablegen; sie gehen in den Eingang 
   Textausschnitt (`snippet`). Filter „nur mit Problemen“. Sortierung nach Nummer absteigend.
 - **Sync** mit dem Archivordner: neue/geänderte PDFs (Änderungsdatum/Größe) einlesen, fehlende entfernen,
   vollständiger Neuaufbau möglich (alles aus den PDFs). Altbestand ohne Metadaten migrieren.
-- `record(forSHA256:)` für Duplikate, `count(tagQuery:)`, `update(…, meta:, text:)`, `remove(path:)`.
+- `record(forSHA256:)` für Duplikate, `count(tagQuery:)`, `update(…, meta:, text:)`, `remove(path:)`,
+  Kategorienfilter und `categoryCounts` (siehe 4.11a).
+
+### 4.11a Kategorien
+- Stehen im Dokument (`DocumentMetadata.categories`, zusätzlich in den PDF-Keywords). Hierarchisch per „/“.
+- Apple Intelligence liefert mit dem Vorschlag den **Absender** und ein bis drei **Arten/Themen**. Im Prompt
+  stehen die vorhandenen Kategorien (Startliste „Rechnung, Bescheid, Vertrag, Kündigung, Mahnung, Kontoauszug,
+  Lohnabrechnung, Krankenkasse, Rente, Versicherung, Steuer, Bank, Wohnen, Arzt, Auto“ ∪ Archiv) und die bekannten
+  Absender; die Startkategorien mit kurzer Beschreibung, Dokumenttext **vor** der Liste (sonst leidet das Datum).
+  Danach wird normalisiert (Schreibweise und Singular an vorhandene angleichen, Komposita „Stromrechnung“ →
+  „Rechnung“, Wiederholungen des Absenders streichen, höchstens eine neue Kategorie, Absender über das erste
+  Wort angleichen → `Absender/<Name>`) und geprüft: Themen der Startliste bleiben nur mit passenden Wörtern im
+  Text (`Categories.evidence`).
+- Index: Spalte `categories` (indiziert) mit `\nA\nA/B\n` inklusive aller Oberkategorien. Filter per
+  `instr(categories, '\n'||k||'\n')`, Facetten-Zahlen unter dem aktuellen Filter, NULL = nicht kategorisiert.
+- Leiste über den Tags: ausgewählte Kategorien als Chips, verfügbare Oberkategorien mit Zahl, bei Unterkategorien
+  ein Menü. Auswahl UND-verknüpft mit Suchfeld und Tags. Kontextmenü „Umbenennen …“ (zusammenführen) und
+  „Aus allen Dokumenten entfernen …“. „Kategorien erzeugen (n)“ ordnet den Bestand nachträglich ein.
+- Eingabe in Scan-Vorschau und „Bearbeiten“: Chips, Eingabefeld mit Vorschlägen, Menü aller Kategorien.
 
 ### 4.12 Tags (gespeicherte Suchen)
 - Name + Ausdruck, z. B. `("Rente" AND "DRV") OR "Rentenversicherung"`. `AND`/`UND`, `OR`/`ODER`,

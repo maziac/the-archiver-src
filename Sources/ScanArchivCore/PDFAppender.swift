@@ -340,7 +340,7 @@ public enum PDFAppender {
         info["Title"] = .text(title.isEmpty
             ? Archive.fileName(date: meta.documentDate, number: meta.number).replacingOccurrences(of: ".pdf", with: "") : title)
         info["Subject"] = .text(summary)
-        info["Keywords"] = .text("\(numberText), Nr. \(numberText)")
+        info["Keywords"] = .text((["\(numberText)", "Nr. \(numberText)"] + (meta.categories ?? [])).joined(separator: ", "))
         info["Creator"] = .text(meta.app)
         info["CreationDate"] = .text(pdfDate(meta.archivedAt))
         info["ModDate"] = .text(pdfDate(Date()))

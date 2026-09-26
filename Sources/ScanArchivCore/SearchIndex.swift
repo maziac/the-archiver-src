@@ -22,6 +22,8 @@ public struct DocumentRecord: Identifiable, Hashable, Sendable {
     /// Titel oder, falls leer, der Dateiname
     public var displayTitle: String { title.isEmpty ? fileName : title }
     public var hasIssues: Bool { !issues.isEmpty }
+    /// Kategorien aus den Metadaten (leer = keine oder noch nicht kategorisiert)
+    public var categories: [String] { meta?.categories ?? [] }
 
     public static func == (a: DocumentRecord, b: DocumentRecord) -> Bool {
         a.path == b.path && a.number == b.number && a.date == b.date && a.title == b.title && a.summary == b.summary
@@ -43,13 +45,13 @@ public enum SearchIndexError: LocalizedError {
 /// und lassen sich per `sync(full: true)` vollständig wiederherstellen.
 public final class SearchIndex: @unchecked Sendable {
     public static let fileName = ".scanarchiv-index.sqlite"
-    static let schemaVersion: Int32 = 4
+    static let schemaVersion: Int32 = 5
     private var db: OpaquePointer?
     private let lock = NSLock()
     private static let transient = unsafeBitCast(-1, to: sqlite3_destructor_type.self)
 
     /// Spalten in fester Reihenfolge (Indizes werden unten beim Lesen verwendet)
-    private static let columns = "number, date, path, pages, issues, archivedAt, source, sha256, meta, originalName, title, summary, text"
+    private static let columns = "number, date, path, pages, issues, archivedAt, source, sha256, meta, originalName, title, summary, text, categories"
     private static let textColumn: Int32 = 12
 
     public init(url: URL) throws {
@@ -66,7 +68,7 @@ public final class SearchIndex: @unchecked Sendable {
             CREATE VIRTUAL TABLE IF NOT EXISTS docs USING fts5(
                 number, date UNINDEXED, path UNINDEXED, pages UNINDEXED, issues UNINDEXED,
                 archivedAt UNINDEXED, source UNINDEXED, sha256 UNINDEXED, meta UNINDEXED,
-                originalName, title, summary, text,
+                originalName, title, summary, text, categories,
                 tokenize = 'unicode61 remove_diacritics 2')
             """)
         // Wörterbuch aller Begriffe – für Tag-Platzhalter am Wortanfang („*rente“)
@@ -88,12 +90,12 @@ public final class SearchIndex: @unchecked Sendable {
                     meta: DocumentMetadata? = nil) throws {
         lock.lock(); defer { lock.unlock() }
         try run("DELETE FROM docs WHERE path = ?", [url.path])
-        try run("INSERT INTO docs(\(SearchIndex.columns)) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        try run("INSERT INTO docs(\(SearchIndex.columns)) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 [SearchIndex.numberField(number), date.timeIntervalSince1970, url.path, pages,
                  DocumentIssue.encode(meta?.issues ?? []),
                  meta?.archivedAt.timeIntervalSince1970 ?? 0, meta?.source.rawValue ?? "", meta?.originalSHA256 ?? "",
                  (try? meta?.encoded()) ?? "", meta?.originalFileName ?? "",
-                 title, summary, text])
+                 title, summary, text, Categories.indexField(meta?.categories) ?? SQLNull()])
     }
 
     /// Nach Bearbeiten/Umbenennen: Pfad, Datum, Titel, Beschreibung und Metadaten aktualisieren.
@@ -104,8 +106,9 @@ public final class SearchIndex: @unchecked Sendable {
                 [newURL.path, date.timeIntervalSince1970, title, summary, oldPath])
         if let text { try run("UPDATE docs SET text = ? WHERE path = ?", [text, newURL.path]) }
         if let meta {
-            try run("UPDATE docs SET meta = ?, issues = ? WHERE path = ?",
-                    [(try? meta.encoded()) ?? "", DocumentIssue.encode(meta.issues), newURL.path])
+            try run("UPDATE docs SET meta = ?, issues = ?, categories = ? WHERE path = ?",
+                    [(try? meta.encoded()) ?? "", DocumentIssue.encode(meta.issues),
+                     Categories.indexField(meta.categories) ?? SQLNull(), newURL.path])
         }
     }
 
@@ -219,65 +222,139 @@ public final class SearchIndex: @unchecked Sendable {
     }
 
     /// Stichwortsuche: alle Wörter müssen vorkommen (UND), jeweils als Präfix.
-    /// Dazu optional Tags (je ein Suchausdruck); alles wird UND-verknüpft.
+    /// Dazu optional Tags (je ein Suchausdruck) und Kategorien (Pfade, auch Oberkategorien); alles wird UND-verknüpft.
     /// Leere Suche liefert alle Dokumente. Sortiert nach Nummer absteigend.
     /// `onlyIssues`: nur Dokumente mit Problemen.
     /// Markiert werden im Textausschnitt nur Wörter aus `query`, nie die der Tags.
-    public func search(_ query: String, tagQueries: [String] = [], onlyIssues: Bool = false, limit: Int = 1000) throws -> [DocumentRecord] {
+    public func search(_ query: String, tagQueries: [String] = [], categories: [String] = [], onlyIssues: Bool = false,
+                       limit: Int = 1000) throws -> [DocumentRecord] {
         lock.lock(); defer { lock.unlock() }
+        let filter = SearchIndex.filter(onlyIssues: onlyIssues, categories: categories)
         if !tagQueries.isEmpty {
-            return try searchWithTags(query, tagQueries: tagQueries, onlyIssues: onlyIssues, limit: limit)
+            return try searchWithTags(query, tagQueries: tagQueries, filter: filter, limit: limit)
         }
         let match = SearchIndex.matchExpression(for: query)
-        let issueFilter = onlyIssues ? "issues != ''" : "1"
+        let issueFilter = filter.sql
         let order = "ORDER BY CAST(substr(number, 1, instr(number, ' ') - 1) AS INTEGER) DESC, path LIMIT ?"
         let map: (OpaquePointer?) -> DocumentRecord = { stmt in
-            let numberField = SearchIndex.text(stmt, 0)
-            return DocumentRecord(
-                number: Int(numberField.split(separator: " ").first ?? "") ?? 0,
-                date: Date(timeIntervalSince1970: sqlite3_column_double(stmt, 1)),
-                path: SearchIndex.text(stmt, 2),
-                pages: Int(sqlite3_column_int(stmt, 3)),
-                title: SearchIndex.text(stmt, 5),
-                summary: SearchIndex.text(stmt, 6),
-                issues: DocumentIssue.decode(SearchIndex.text(stmt, 4)),
-                meta: DocumentMetadata.decode(SearchIndex.text(stmt, 7)),
-                snippet: SearchIndex.text(stmt, 8).replacingOccurrences(of: "\n", with: " "))
+            SearchIndex.record(stmt, snippet: SearchIndex.text(stmt, 8).replacingOccurrences(of: "\n", with: " "))
         }
-        let fields = "number, date, path, pages, issues, title, summary, meta"
+        let fields = SearchIndex.recordFields
         if let match {
             return try self.query("""
                 SELECT \(fields), snippet(docs, \(SearchIndex.textColumn), char(1), char(2), '…', 16)
                 FROM docs WHERE docs MATCH ? AND \(issueFilter) \(order)
-                """, [match, limit], map)
+                """, [match] + filter.params + [limit], map)
         }
         return try self.query("""
             SELECT \(fields), substr(text, 1, 160) FROM docs WHERE \(issueFilter) \(order)
-            """, [limit], map)
+            """, filter.params + [limit], map)
     }
 
     /// Suche mit Tags: Textausschnitt in Swift, damit Tag-Wörter nicht markiert werden. Aufrufer hält den Lock.
-    private func searchWithTags(_ query: String, tagQueries: [String], onlyIssues: Bool, limit: Int) throws -> [DocumentRecord] {
-        var parts = try tagQueries.map { "(" + (try tagExpression($0)) + ")" }
-        if let free = SearchIndex.matchExpression(for: query) { parts.append("(" + free + ")") }
-        let issueFilter = onlyIssues ? "issues != ''" : "1"
+    private func searchWithTags(_ query: String, tagQueries: [String], filter: (sql: String, params: [Any]),
+                                limit: Int) throws -> [DocumentRecord] {
+        let match = try fullMatch(query, tagQueries: tagQueries)!
+        let issueFilter = filter.sql
         let words = SearchIndex.words(in: query)
         return try self.query("""
-            SELECT number, date, path, pages, issues, title, summary, meta, text
+            SELECT \(SearchIndex.recordFields), text
             FROM docs WHERE docs MATCH ? AND \(issueFilter)
             ORDER BY CAST(substr(number, 1, instr(number, ' ') - 1) AS INTEGER) DESC, path LIMIT ?
-            """, [parts.joined(separator: " AND "), limit]) { stmt in
-            DocumentRecord(
-                number: Int(SearchIndex.text(stmt, 0).split(separator: " ").first ?? "") ?? 0,
-                date: Date(timeIntervalSince1970: sqlite3_column_double(stmt, 1)),
-                path: SearchIndex.text(stmt, 2),
-                pages: Int(sqlite3_column_int(stmt, 3)),
-                title: SearchIndex.text(stmt, 5),
-                summary: SearchIndex.text(stmt, 6),
-                issues: DocumentIssue.decode(SearchIndex.text(stmt, 4)),
-                meta: DocumentMetadata.decode(SearchIndex.text(stmt, 7)),
-                snippet: SearchIndex.snippet(SearchIndex.text(stmt, 8), highlighting: words))
+            """, [match] + filter.params + [limit]) { stmt in
+            SearchIndex.record(stmt, snippet: SearchIndex.snippet(SearchIndex.text(stmt, 8), highlighting: words))
         }
+    }
+
+    /// Ein Dokument des Index (ohne Textausschnitt).
+    public func record(path: String) throws -> DocumentRecord? {
+        lock.lock(); defer { lock.unlock() }
+        return try query("SELECT \(SearchIndex.recordFields) FROM docs WHERE path = ?", [path]) {
+            SearchIndex.record($0, snippet: "")
+        }.first
+    }
+
+    /// Spalten für `record(_:snippet:)`, in dieser Reihenfolge
+    private static let recordFields = "number, date, path, pages, issues, title, summary, meta"
+
+    private static func record(_ stmt: OpaquePointer?, snippet: String) -> DocumentRecord {
+        DocumentRecord(
+            number: Int(text(stmt, 0).split(separator: " ").first ?? "") ?? 0,
+            date: Date(timeIntervalSince1970: sqlite3_column_double(stmt, 1)),
+            path: text(stmt, 2),
+            pages: Int(sqlite3_column_int(stmt, 3)),
+            title: text(stmt, 5),
+            summary: text(stmt, 6),
+            issues: DocumentIssue.decode(text(stmt, 4)),
+            meta: DocumentMetadata.decode(text(stmt, 7)),
+            snippet: snippet)
+    }
+
+    /// Filter für Probleme und Kategorien (SQL-Bedingung + Parameter).
+    static func filter(onlyIssues: Bool, categories: [String]) -> (sql: String, params: [Any]) {
+        var conditions = [onlyIssues ? "issues != ''" : "1"]
+        conditions += categories.map { _ in "instr(categories, ?) > 0" }
+        return (conditions.joined(separator: " AND "), categories.map { "\n" + $0 + "\n" })
+    }
+
+    /// FTS-Ausdruck aus Suchfeld und Tags (nil = keine Einschränkung). Aufrufer hält den Lock.
+    private func fullMatch(_ query: String, tagQueries: [String]) throws -> String? {
+        var parts = try tagQueries.map { "(" + (try tagExpression($0)) + ")" }
+        if let free = SearchIndex.matchExpression(for: query) { parts.append("(" + free + ")") }
+        return parts.isEmpty ? nil : parts.joined(separator: " AND ")
+    }
+
+    // MARK: Kategorien
+
+    /// Trefferzahl je Kategorie (inkl. Oberkategorien) unter dem aktuellen Filter.
+    public func categoryCounts(query: String = "", tagQueries: [String] = [], categories: [String] = [],
+                               onlyIssues: Bool = false) throws -> [String: Int] {
+        lock.lock(); defer { lock.unlock() }
+        let filter = SearchIndex.filter(onlyIssues: onlyIssues, categories: categories)
+        let rows: [String]
+        if let match = try fullMatch(query, tagQueries: tagQueries) {
+            rows = try self.query("SELECT categories FROM docs WHERE docs MATCH ? AND categories != '' AND \(filter.sql)",
+                                  [match] + filter.params) { SearchIndex.text($0, 0) }
+        } else {
+            rows = try self.query("SELECT categories FROM docs WHERE categories != '' AND \(filter.sql)", filter.params) {
+                SearchIndex.text($0, 0)
+            }
+        }
+        var counts: [String: Int] = [:]
+        for row in rows {
+            for category in row.split(separator: "\n") { counts[String(category), default: 0] += 1 }
+        }
+        return counts
+    }
+
+    /// Alle im Archiv vergebenen Kategorien (ohne reine Oberkategorien), sortiert.
+    public func allCategories() throws -> [String] {
+        lock.lock(); defer { lock.unlock() }
+        var all = Set<String>()
+        for meta in try query("SELECT meta FROM docs WHERE categories != ''", [], { SearchIndex.text($0, 0) }) {
+            all.formUnion(DocumentMetadata.decode(meta)?.categories ?? [])
+        }
+        return all.sorted { $0.localizedStandardCompare($1) == .orderedAscending }
+    }
+
+    /// Dokumente, die eine Kategorie (oder eine ihrer Unterkategorien) tragen.
+    public func records(inCategory category: String) throws -> [DocumentRecord] {
+        try search("", categories: [category], limit: 1_000_000)
+    }
+
+    /// Dokumente mit ScanArchiv-Metadaten, die noch nicht kategorisiert wurden, samt Volltext.
+    public func recordsWithoutCategories() throws -> [(path: String, text: String)] {
+        lock.lock(); defer { lock.unlock() }
+        return try query("SELECT path, text FROM docs WHERE categories IS NULL AND meta != '' ORDER BY path", []) {
+            (SearchIndex.text($0, 0), SearchIndex.text($0, 1))
+        }
+    }
+
+    public func countWithoutCategories() throws -> Int {
+        lock.lock(); defer { lock.unlock() }
+        return try query("SELECT count(*) FROM docs WHERE categories IS NULL AND meta != ''", []) {
+            Int(sqlite3_column_int($0, 0))
+        }.first ?? 0
     }
 
     static func words(in query: String) -> [String] {
@@ -345,6 +422,7 @@ public final class SearchIndex: @unchecked Sendable {
             switch param {
             case let v as Int: sqlite3_bind_int64(stmt, idx, Int64(v))
             case let v as Double: sqlite3_bind_double(stmt, idx, v)
+            case is SQLNull: sqlite3_bind_null(stmt, idx)
             default: sqlite3_bind_text(stmt, idx, "\(param)", -1, SearchIndex.transient)
             }
         }
@@ -371,6 +449,9 @@ public final class SearchIndex: @unchecked Sendable {
         }
         return rows
     }
+
+    /// Parameter für SQL-NULL
+    private struct SQLNull {}
 
     private static func text(_ stmt: OpaquePointer?, _ col: Int32) -> String {
         sqlite3_column_text(stmt, col).map { String(cString: $0) } ?? ""

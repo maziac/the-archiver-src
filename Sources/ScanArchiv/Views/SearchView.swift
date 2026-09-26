@@ -21,6 +21,13 @@ struct SearchView: View {
     @State private var tagCounts: [UUID: Int] = [:]
     @State private var editingTag: Tag?
     @State private var creatingTag = false
+    /// aktive Kategorien (UND-verknüpft; eine Oberkategorie trifft auch ihre Unterkategorien)
+    @State private var activeCategories: [String] = []
+    /// Trefferzahl je Kategorie unter dem aktuellen Filter
+    @State private var categoryCounts: [String: Int] = [:]
+    @State private var renamingCategory: String?
+    @State private var newCategoryName = ""
+    @State private var removingCategory: String?
 
     static let dateFormat: DateFormatter = {
         let f = DateFormatter()
@@ -31,8 +38,9 @@ struct SearchView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            ImportStatusBar(newPaths: $newPaths, query: $query, activeTags: $activeTags,
+            ImportStatusBar(newPaths: $newPaths, query: $query, activeTags: $activeTags, activeCategories: $activeCategories,
                             onlyIssues: $onlyIssues, sortOrder: $sortOrder)
+            categoryBar
             tagBar
             HStack {
                 Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
@@ -80,15 +88,21 @@ struct SearchView: View {
         .onChange(of: selection) { _, _ in updatePreview() }
         .onChange(of: query) { _, _ in updatePreview() }
         .onChange(of: results) { _, _ in updatePreview() }
-        .task(id: "\(query)|\(onlyIssues)|\(activeTagQueries)|\(model.revision)|\(model.archive?.folder.path ?? "")") {
+        .task(id: "\(query)|\(onlyIssues)|\(activeTagQueries)|\(activeCategories)|\(model.revision)|\(model.archive?.folder.path ?? "")") {
             try? await Task.sleep(for: .milliseconds(150))
             guard !Task.isCancelled, let index = model.index else { return }
             do {
-                results = try index.search(query, tagQueries: activeTagQueries, onlyIssues: onlyIssues).sorted(using: sortOrder)
+                results = try index.search(query, tagQueries: activeTagQueries, categories: activeCategories,
+                                           onlyIssues: onlyIssues).sorted(using: sortOrder)
                 error = nil
             } catch {
                 self.error = "Tag-Suche: \(error.localizedDescription)"
             }
+            let (query, tags, categories, onlyIssues) = (query, activeTagQueries, activeCategories, onlyIssues)
+            let counts = await Task.detached(priority: .userInitiated) {
+                (try? index.categoryCounts(query: query, tagQueries: tags, categories: categories, onlyIssues: onlyIssues)) ?? [:]
+            }.value
+            if !Task.isCancelled { categoryCounts = counts }
         }
         // Trefferzahlen der Tags im Hintergrund (bei tausenden Dokumenten wenige Millisekunden je Tag)
         .task(id: "\(model.tags)|\(model.revision)") {
@@ -109,7 +123,32 @@ struct SearchView: View {
         }
         .onChange(of: model.tags) { _, tags in activeTags.formIntersection(tags.map(\.id)) }
         // Markierung „neu“ gilt nur für die Liste, die „Anzeigen“ eingestellt hat
-        .onChange(of: "\(query)|\(activeTags.map(\.uuidString).sorted().joined())|\(onlyIssues)") { _, _ in newPaths = [] }
+        .onChange(of: "\(query)|\(activeTags.map(\.uuidString).sorted().joined())|\(activeCategories)|\(onlyIssues)") { _, _ in
+            newPaths = []
+        }
+        .alert("Kategorie umbenennen", isPresented: Binding(
+            get: { renamingCategory != nil },
+            set: { if !$0 { renamingCategory = nil } })
+        ) {
+            TextField("Neuer Name", text: $newCategoryName)
+            Button("Umbenennen") {
+                if let old = renamingCategory { changeCategory(old, to: newCategoryName) }
+            }
+            Button("Abbrechen", role: .cancel) {}
+        } message: {
+            Text("Gilt für alle Dokumente dieser Kategorie. Gibt es den Namen schon, werden beide Kategorien zusammengeführt. Mit „/“ lässt sich eine Unterkategorie angeben, z. B. „Absender/DAK“.")
+        }
+        .confirmationDialog(
+            "Kategorie „\(removingCategory.map(Categories.display) ?? "")“ aus allen Dokumenten entfernen?",
+            isPresented: Binding(get: { removingCategory != nil }, set: { if !$0 { removingCategory = nil } })
+        ) {
+            Button("Entfernen", role: .destructive) {
+                if let old = removingCategory { changeCategory(old, to: nil) }
+            }
+            Button("Abbrechen", role: .cancel) {}
+        } message: {
+            Text("Die Dokumente bleiben erhalten, nur die Kategorie (samt Unterkategorien) wird entfernt.")
+        }
         .sheet(item: $editingTag) { tag in TagEditorSheet(tag: tag) }
         .sheet(isPresented: $creatingTag) { TagEditorSheet(tag: nil) }
         .onChange(of: sortOrder) { _, order in results.sort(using: order) }
@@ -161,6 +200,12 @@ struct SearchView: View {
                         Text(record.summary)
                             .foregroundStyle(.secondary)
                             .lineLimit(2)
+                    }
+                    if !record.categories.isEmpty {
+                        Text(record.categories.map(Categories.display).joined(separator: " · "))
+                            .font(.caption)
+                            .foregroundStyle(.tint)
+                            .lineLimit(1)
                     }
                     // Trefferausschnitt bei aktiver Suche; ohne Titel/Beschreibung der Textanfang
                     if !query.trimmingCharacters(in: .whitespaces).isEmpty || record.summary.isEmpty {
@@ -249,19 +294,26 @@ struct SearchView: View {
             HStack {
                 ProgressView(value: Double(batch.done), total: Double(max(batch.total, 1)))
                     .frame(maxWidth: 240)
-                Text("Titel werden erzeugt: \(batch.done) / \(batch.total)")
+                Text("\(batch.kind == .titles ? "Titel" : "Kategorien") werden erzeugt: \(batch.done) / \(batch.total)")
                     .monospacedDigit()
                 Spacer()
                 Button("Abbrechen") { model.cancelTitleBatch() }
             }
             .padding(.horizontal, 10)
             .padding(.bottom, 8)
-        } else if model.missingTitleCount > 0, Summarizer.isAvailable {
+        } else if model.missingTitleCount > 0 || model.missingCategoriesCount > 0, Summarizer.isAvailable {
             HStack {
                 Image(systemName: "sparkles").foregroundStyle(.tint)
-                Text("\(model.missingTitleCount) Dokument(e) ohne Titel.")
-                    .foregroundStyle(.secondary)
-                Button("Titel erzeugen") { model.generateMissingTitles() }
+                if model.missingTitleCount > 0 {
+                    Text("\(model.missingTitleCount) Dokument(e) ohne Titel.")
+                        .foregroundStyle(.secondary)
+                    Button("Titel erzeugen") { model.generateMissingTitles() }
+                }
+                if model.missingCategoriesCount > 0 {
+                    Text("\(model.missingCategoriesCount) Dokument(e) ohne Kategorien.")
+                        .foregroundStyle(.secondary)
+                    Button("Kategorien erzeugen") { model.generateMissingCategories() }
+                }
                 if let result = model.titleBatchResult {
                     Text(result).foregroundStyle(.secondary)
                 }
@@ -281,6 +333,106 @@ struct SearchView: View {
 
     private var activeTagQueries: [String] {
         model.tags.filter { activeTags.contains($0.id) }.map(\.query)
+    }
+
+    /// Kategorien über den Tags: aktive als Chips, darunter verfügbare Oberkategorien mit Trefferzahl;
+    /// Oberkategorien mit Unterkategorien öffnen ein Menü.
+    private var categoryBar: some View {
+        let available = categoryCounts.filter { $0.value > 0 && !activeCategories.contains($0.key) }.map(\.key)
+        let roots = CategoryTree.children(of: nil, in: available)
+        return HStack(spacing: 6) {
+            Image(systemName: "folder").foregroundStyle(.secondary)
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 6) {
+                    ForEach(activeCategories, id: \.self) { category in
+                        CategoryChip(title: Categories.display(category), selected: true) {
+                            activeCategories.removeAll { $0 == category }
+                        }
+                        .contextMenu { categoryActions(category) }
+                    }
+                    if roots.isEmpty && activeCategories.isEmpty {
+                        Text("Noch keine Kategorien – sie entstehen beim Scannen und Importieren")
+                            .font(.callout)
+                            .foregroundStyle(.tertiary)
+                    }
+                    ForEach(roots, id: \.self) { root in
+                        if CategoryTree.children(of: root, in: available).isEmpty {
+                            Button(categoryLabel(root)) { selectCategory(root) }
+                                .contextMenu { categoryActions(root) }
+                        } else {
+                            Menu(categoryLabel(root)) {
+                                Button("Alle: \(categoryLabel(root))") { selectCategory(root) }
+                                Divider()
+                                categoryMenuItems(parent: root, available: available)
+                            }
+                            .fixedSize()
+                            .contextMenu { categoryActions(root) }
+                        }
+                    }
+                }
+                .monospacedDigit()
+                .padding(.vertical, 2)
+            }
+            if !activeCategories.isEmpty {
+                Button("Alle aufheben") { activeCategories.removeAll() }
+                    .buttonStyle(.borderless)
+                    .font(.callout)
+            }
+        }
+        .controlSize(.small)
+        .padding(.horizontal, 10)
+        .padding(.top, 8)
+    }
+
+    private func categoryLabel(_ path: String) -> String {
+        Categories.leaf(path) + (categoryCounts[path].map { " (\($0))" } ?? "")
+    }
+
+    /// Unterkategorien als Menüeinträge; weitere Ebenen als Untermenüs.
+    private func categoryMenuItems(parent: String, available: [String]) -> AnyView {
+        AnyView(ForEach(CategoryTree.children(of: parent, in: available), id: \.self) { path in
+            if CategoryTree.children(of: path, in: available).isEmpty {
+                Button(categoryLabel(path)) { selectCategory(path) }
+            } else {
+                Menu(categoryLabel(path)) {
+                    Button("Alle: \(categoryLabel(path))") { selectCategory(path) }
+                    Divider()
+                    categoryMenuItems(parent: path, available: available)
+                }
+            }
+        })
+    }
+
+    @ViewBuilder
+    private func categoryActions(_ category: String) -> some View {
+        Button("Umbenennen …") {
+            newCategoryName = category
+            renamingCategory = category
+        }
+        Button("Aus allen Dokumenten entfernen …", role: .destructive) { removingCategory = category }
+    }
+
+    /// Kategorie auswählen; eine gewählte Ober- oder Unterkategorie derselben Linie wird ersetzt.
+    private func selectCategory(_ path: String) {
+        activeCategories.removeAll { path.hasPrefix($0 + "/") || $0.hasPrefix(path + "/") || $0 == path }
+        activeCategories.append(path)
+    }
+
+    private func changeCategory(_ old: String, to new: String?) {
+        let target = new.map(Categories.cleanPath)
+        if target == old || target?.isEmpty == true { return }
+        Task {
+            do {
+                try await model.renameCategory(old, to: target)
+                activeCategories = activeCategories.compactMap { active in
+                    guard active == old || active.hasPrefix(old + "/") else { return active }
+                    guard let target, !target.isEmpty else { return nil }
+                    return target + active.dropFirst(old.count)
+                }
+            } catch {
+                self.error = error.localizedDescription
+            }
+        }
     }
 
     /// Tags als Schaltflächen über dem Suchfeld; Klick schaltet den Filter an/aus.
@@ -383,6 +535,7 @@ private struct ImportStatusBar: View {
     @Binding var newPaths: Set<String>
     @Binding var query: String
     @Binding var activeTags: Set<UUID>
+    @Binding var activeCategories: [String]
     @Binding var onlyIssues: Bool
     @Binding var sortOrder: [KeyPathComparator<DocumentRecord>]
 
@@ -448,6 +601,7 @@ private struct ImportStatusBar: View {
     private func show(_ batch: InboxService.Batch) {
         query = ""
         activeTags.removeAll()
+        activeCategories.removeAll()
         onlyIssues = false
         sortOrder = [KeyPathComparator(\DocumentRecord.number, order: .reverse)]
         newPaths = Set(batch.archivedPaths)
@@ -462,6 +616,7 @@ private struct EditDocumentSheet: View {
     @State private var date: Date
     @State private var title: String
     @State private var summary: String
+    @State private var categories: [String]
     @State private var busy = false
     @State private var message: String?
     /// Werte stammen aus „Neu vorschlagen“ (Apple Intelligence)
@@ -472,6 +627,7 @@ private struct EditDocumentSheet: View {
         _date = State(initialValue: record.date)
         _title = State(initialValue: record.title)
         _summary = State(initialValue: record.summary)
+        _categories = State(initialValue: record.categories)
     }
 
     var body: some View {
@@ -484,6 +640,10 @@ private struct EditDocumentSheet: View {
                 TextField("Titel", text: $title)
                 TextField("Beschreibung", text: $summary, axis: .vertical)
                     .lineLimit(3...6)
+                LabeledContent("Kategorien") {
+                    CategoryEditor(categories: $categories, known: model.knownCategories)
+                        .disabled(record.meta == nil)
+                }
             }
             if let message {
                 Text(message).font(.caption).foregroundStyle(.orange)
@@ -518,6 +678,7 @@ private struct EditDocumentSheet: View {
                 suggested = true
                 title = suggestion.title
                 summary = suggestion.summary
+                categories = suggestion.categories
                 if let date = suggestion.date { self.date = date }
             } catch {
                 message = error.localizedDescription
@@ -535,7 +696,9 @@ private struct EditDocumentSheet: View {
                 let textChanged = title != record.title || summary != record.summary
                 try await model.updateDocument(path: record.path, date: date, title: title, summary: summary,
                                                titleSource: textChanged ? (suggested ? .ai : .manual) : nil,
-                                               dateSource: dateChanged ? (suggested ? .ai : .manual) : nil)
+                                               dateSource: dateChanged ? (suggested ? .ai : .manual) : nil,
+                                               categories: categories != record.categories || (record.meta?.categories == nil && suggested)
+                                                   ? categories : nil)
                 dismiss()
             } catch {
                 message = error.localizedDescription

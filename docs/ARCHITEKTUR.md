@@ -175,13 +175,14 @@ flowchart TB
 |---|---|
 | `ImportProcessor` | Ein PDF oder Bild archivieren: Text übernehmen oder OCR, leere Seiten, Reihenfolge, Vorschlag, Datum, bis zu drei Fassungen erzeugen, prüfen, kleinste speichern, indexieren |
 | `OCRService` | Vision-Texterkennung (de/en) auf eigener serieller Queue; Ausrichtung per schneller OCR in vier Richtungen |
-| `Summarizer` | Apple Intelligence (lokal): Titel, Beschreibung, Datum aus den ersten zwei Seiten |
+| `Summarizer` | Apple Intelligence (lokal): Titel, Beschreibung, Datum, Absender und Kategorien aus den ersten zwei Seiten |
+| `Categories` | Kategorien als Pfade („Absender/DAK“): Startliste, Normalisieren an vorhandene, Oberkategorien, Umbenennen |
 | `PDFBuilder` | Neues PDF aus Seitenbildern mit unsichtbarer Textebene und rotem Stempel (Scans, Bilder, komprimierte Fassung) |
 | `PDFStamper` | Vorhandenes PDF über PDFKit neu schreiben (Alternative, falls kleiner) |
 | `PDFAppender` | Stempel, Textebene, Metadaten, neue Reihenfolge und Drehung **anhängen**; Original bleibt bitgenau |
 | `PDFRaw` | Eigener PDF-Parser (Querverweistabellen und -Streams, Objekt-Streams) und Writer für inkrementelle Updates |
 | `Archive` | Ordner mit fortlaufender Nummer; Speichern, Umbenennen, Metadaten ändern, Seiten umsortieren, Altbestand migrieren |
-| `SearchIndex` | Volltextsuche (Wortanfänge, alle Wörter UND), Tag-Filter, Problemfilter, Duplikaterkennung per SHA-256, Neuaufbau aus den PDFs |
+| `SearchIndex` | Volltextsuche (Wortanfänge, alle Wörter UND), Tag-Filter, Kategorienfilter und -zahlen, Problemfilter, Duplikaterkennung per SHA-256, Neuaufbau aus den PDFs |
 
 ---
 
@@ -364,15 +365,16 @@ flowchart TD
     MIN --> IDX["SearchIndex.add"]
 ```
 
-### 4.6 Suchen, Tags und Vorschau
+### 4.6 Suchen, Kategorien, Tags und Vorschau
 
 ```mermaid
 %%{init: {"theme": "base", "themeVariables": {"lineColor": "#7f9cd6", "primaryColor": "#eef2fa", "primaryTextColor": "#1d2433", "primaryBorderColor": "#7f9cd6", "secondaryColor": "#f3f0fa", "tertiaryColor": "#f6f8fc", "clusterBkg": "#f6f8fc", "clusterBorder": "#7f9cd6", "titleColor": "#1d2433", "edgeLabelBackground": "#ffffff", "textColor": "#1d2433", "signalColor": "#7f9cd6", "signalTextColor": "#7f9cd6", "actorBkg": "#eef2fa", "actorBorder": "#7f9cd6", "actorTextColor": "#1d2433", "actorLineColor": "#7f9cd6", "labelBoxBkgColor": "#eef2fa", "labelTextColor": "#1d2433", "loopTextColor": "#7f9cd6", "noteBkgColor": "#fff7d6", "noteTextColor": "#1d2433"}, "themeCSS": ".flowchart-link, .messageLine0, .messageLine1, .actor-line { stroke-width: 2px !important; }"}}%%
 flowchart TD
     A([Tab „Archiv“]) --> B["Suchfeld<br/>alle Wörter UND, Wortanfänge"]
     A --> T["Tags (gespeicherte Suchen)<br/>z. B. (Rente AND DRV) OR Rentenversicherung"]
+    A --> K["Kategorien (im PDF)<br/>z. B. Absender › DAK, Rechnung"]
     A --> F["„Nur mit Problemen“"]
-    B & T & F --> Q["SearchIndex.search<br/>Suchfeld AND Tag1 AND Tag2 …"]
+    B & T & K & F --> Q["SearchIndex.search<br/>Suchfeld AND Tags AND Kategorien"]
     T --> TQ["TagQuery → FTS5-Ausdruck<br/>*rente über Wörterbuch (fts5vocab)"] --> Q
     Q --> L["Trefferliste<br/>rot = Fehler, gelb = Hinweis"]
     L -- Auswahl --> V["PDFPreviewPane<br/>Suchbegriff vorbelegt, Treffer markiert<br/>(Tag-Wörter werden nie markiert)"]

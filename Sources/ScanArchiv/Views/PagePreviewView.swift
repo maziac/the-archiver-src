@@ -101,6 +101,10 @@ private struct MetadataForm: View {
                 TextField("Kurzbeschreibung", text: $session.summary, axis: .vertical)
                     .lineLimit(2...4)
             }
+            GridRow {
+                Text("Kategorien").foregroundStyle(.secondary)
+                CategoryEditor(categories: $session.categories, known: session.model.knownCategories)
+            }
         }
         .textFieldStyle(.roundedBorder)
     }

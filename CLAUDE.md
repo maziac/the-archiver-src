@@ -60,6 +60,9 @@ FoundationModels **weak-linked**), `ScanArchiv` (SwiftUI-App, Scanner, Eingangso
   Quelle für alle Wege), Kompression.
 - `SearchIndex` – SQLite FTS5 (+ `fts5vocab` für führende Platzhalter), Suche, Tag-Filter,
   Problemfilter, Duplikate, Neuaufbau.
+- `Categories` – Kategorien als Pfade (`Absender/DAK`) in `DocumentMetadata.categories` (nil = noch nicht
+  kategorisiert); Apple Intelligence schlägt sie mit Titel/Datum vor, `normalize` gleicht an vorhandene an.
+  Index-Spalte `categories` enthält alle Oberkategorien (`\nA\nA/B\n`).
 - Kleinteile: `OCRService`, `Summarizer`, `DateExtractor`, `FileDate`, `PageNumbering`, `BlankPage`,
   `PageOrder`, `ImagesToPDF`, `FolderScan`, `TagQuery`/`TagStore`, `DocumentMetadata`/`PDFMetadata`,
   `DocumentIssue`, `DocumentInfo`.

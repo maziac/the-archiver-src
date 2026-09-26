@@ -3,17 +3,20 @@ import Foundation
 import FoundationModels
 #endif
 
-/// Vorschlag für Titel, Beschreibung und Dokumentdatum.
+/// Vorschlag für Titel, Beschreibung, Dokumentdatum und Kategorien.
 public struct DocumentSuggestion: Sendable, Equatable {
     public var title: String
     public var summary: String
     /// nil = kein Datum im Text gefunden
     public var date: Date?
+    /// Kategorien (bereits an vorhandene angeglichen), z. B. „Absender/DAK“, „Rechnung“
+    public var categories: [String]
 
-    public init(title: String, summary: String, date: Date?) {
+    public init(title: String, summary: String, date: Date?, categories: [String] = []) {
         self.title = title
         self.summary = summary
         self.date = date
+        self.categories = categories
     }
 }
 
@@ -32,12 +35,16 @@ public enum SummarizerError: LocalizedError {
 @available(macOS 26, *)
 @Generable
 struct GeneratedSummary {
+    @Guide(description: "Ausstellungsdatum des Dokuments (Brief- oder Rechnungsdatum, nicht Fälligkeit oder Zeitraum) im Format JJJJ-MM-TT; leer, wenn keines erkennbar ist")
+    var documentDate: String
     @Guide(description: "Aussagekräftiger deutscher Titel mit 3 bis 6 Wörtern: Dokumentart, Absender und ggf. Zeitraum, z. B. 'Stromrechnung Stadtwerke München 2026' oder 'Kündigungsbestätigung Fitnessstudio FitX'")
     var title: String
     @Guide(description: "Ein bis zwei deutsche Sätze: Absender, Art des Dokuments und die wichtigsten Angaben wie Betrag, Frist oder Zeitraum")
     var summary: String
-    @Guide(description: "Ausstellungsdatum des Dokuments (Brief- oder Rechnungsdatum, nicht Fälligkeit oder Zeitraum) im Format JJJJ-MM-TT; leer, wenn keines erkennbar ist")
-    var documentDate: String
+    @Guide(description: "Kurzer, gebräuchlicher Name des Absenders (Firma, Behörde, Kasse, Person), z. B. 'DAK', 'Deutsche Rentenversicherung', 'Stadtwerke München'; leer, wenn nicht erkennbar")
+    var sender: String
+    @Guide(description: "Ein bis drei deutsche Kategorien für Dokumentart und Thema, je ein Wort im Singular, z. B. 'Rechnung', 'Krankenkasse'. Aus der Liste der vorhandenen Kategorien, und nur solche, deren Beschreibung eindeutig zutrifft – lieber weniger als eine unsichere. Eine neue Kategorie nur, wenn keine vorhandene passt. Nicht den Absender.", .count(1...3))
+    var categories: [String]
 }
 #endif
 
@@ -105,17 +112,21 @@ public enum Summarizer {
 
     /// Vorschlag aus dem OCR-Text. Das Datum wird nur übernommen, wenn es wirklich im Text steht;
     /// sonst gilt das erste plausible Datum im Text.
-    public static func suggest(for text: String) async throws -> DocumentSuggestion {
+    /// - knownCategories: bereits vorhandene Kategorien (inkl. „Absender/…“); das Modell bevorzugt sie,
+    ///   und das Ergebnis wird an ihre Schreibweise angeglichen.
+    public static func suggest(for text: String, knownCategories: [String] = Categories.defaults) async throws -> DocumentSuggestion {
         let fallbackDate = DateExtractor.bestGuess(in: text)
         if let reason = unavailableReason { throw SummarizerError.unavailable(reason) }
         #if canImport(FoundationModels)
         if #available(macOS 26, *) {
             do {
-                return try await generate(from: cleanedForModel(text), fullText: text, fallbackDate: fallbackDate)
+                return try await generate(from: cleanedForModel(text), fullText: text, fallbackDate: fallbackDate,
+                                          known: knownCategories)
             } catch LanguageModelSession.GenerationError.unsupportedLanguageOrLocale {
                 // zweiter Versuch nur mit eindeutigen Textzeilen (z. B. Steuer-/Codezeilen im PDF)
                 do {
-                    return try await generate(from: cleanedForModel(text, strict: true), fullText: text, fallbackDate: fallbackDate)
+                    return try await generate(from: cleanedForModel(text, strict: true), fullText: text, fallbackDate: fallbackDate,
+                                              known: knownCategories)
                 } catch LanguageModelSession.GenerationError.unsupportedLanguageOrLocale {
                     throw SummarizerError.failed("Apple Intelligence hält die Sprache des Textes für nicht unterstützt.")
                 }
@@ -136,17 +147,37 @@ public enum Summarizer {
 
     #if canImport(FoundationModels)
     @available(macOS 26, *)
-    private static func generate(from modelText: String, fullText: String, fallbackDate: Date?) async throws -> DocumentSuggestion {
+    private static func generate(from modelText: String, fullText: String, fallbackDate: Date?,
+                                 known: [String]) async throws -> DocumentSuggestion {
         let response = try await takeSession().respond(
-            to: "Dokumenttext:\n\(String(modelText.prefix(maxCharacters)))",
+            to: prompt(modelText: modelText, known: known),
             generating: GeneratedSummary.self)
         let generated = response.content
+        let sender = generated.sender.trimmingCharacters(in: .whitespacesAndNewlines)
         return DocumentSuggestion(
             title: generated.title.trimmingCharacters(in: .whitespacesAndNewlines.union(.init(charactersIn: "\"'"))),
             summary: generated.summary.trimmingCharacters(in: .whitespacesAndNewlines),
-            date: DateExtractor.validate(modelDate: generated.documentDate, against: fullText) ?? fallbackDate)
+            date: DateExtractor.validate(modelDate: generated.documentDate, against: fullText) ?? fallbackDate,
+            categories: Categories.verified(
+                Categories.normalize(generated.categories, sender: sender.isEmpty ? nil : sender, known: known), text: fullText))
     }
     #endif
+
+    /// Anfrage an das Modell: Dokumenttext, dann vorhandene Kategorien und Absender.
+    static func prompt(modelText: String, known: [String]) -> String {
+        let senders = Categories.senders(in: known)
+        let kinds = known.filter { Categories.expanded([$0]).first != Categories.senderRoot }
+        // Dokumenttext zuerst: eine lange Liste davor lenkt das Modell z. B. beim Datum ab
+        var prompt = "Dokumenttext:\n\(String(modelText.prefix(maxCharacters)))\n"
+        if !kinds.isEmpty {
+            prompt += "\nVorhandene Kategorien (nur vergeben, wenn die Beschreibung eindeutig zutrifft):\n"
+            for kind in kinds {
+                prompt += "- " + kind + (Categories.descriptions[kind].map { ": " + $0 } ?? "") + "\n"
+            }
+        }
+        if !senders.isEmpty { prompt += "\nBekannte Absender: \(senders.prefix(200).joined(separator: ", "))\n" }
+        return prompt
+    }
 
     /// Entfernt maschinelle Zeilen, die das Sprachmodell irritieren – z. B. unsichtbare Steuerzeilen von
     /// Druckdienstleistern („#!#METASTART#!#MANDANT#!#…“), Barcode-Inhalte oder Zeichensalat.

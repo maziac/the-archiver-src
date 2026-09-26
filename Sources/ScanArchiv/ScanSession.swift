@@ -99,6 +99,7 @@ final class ScanSession {
     // Metadaten-Vorschlag (bearbeitbar in der Vorschau)
     var title = "" { didSet { if !applying { titleEdited = true } } }
     var summary = "" { didSet { if !applying { summaryEdited = true } } }
+    var categories: [String] = [] { didSet { if !applying { categoriesEdited = true } } }
     var documentDate = Date() { didSet { if !applying { dateSource = .manual } } }
     private(set) var dateSource: DateSource = .today
     /// Datum stammt von Apple Intelligence (sonst direkt aus dem Text)
@@ -108,6 +109,9 @@ final class ScanSession {
     private(set) var savedIssues: [DocumentIssue] = []
     @ObservationIgnored private var titleEdited = false
     @ObservationIgnored private var summaryEdited = false
+    @ObservationIgnored private var categoriesEdited = false
+    /// Kategorien stammen aus einem Vorschlag oder wurden von Hand gesetzt (sonst: noch nicht kategorisiert)
+    @ObservationIgnored private var categoriesDecided = false
     @ObservationIgnored private var applying = false
     /// OCR-Ergebnis je Seite, gültig für die gespeicherte Drehung
     @ObservationIgnored private var ocrCache: [UUID: (rotation: Int, lines: [OCRLine])] = [:]
@@ -244,10 +248,13 @@ final class ScanSession {
         withoutEditTracking {
             title = ""
             summary = ""
+            categories = []
             documentDate = Date()
         }
         titleEdited = false
         summaryEdited = false
+        categoriesEdited = false
+        categoriesDecided = false
         dateSource = .today
         suggestionState = .idle
         phase = .ready
@@ -324,6 +331,7 @@ final class ScanSession {
         suggestedText = nil
         titleEdited = false
         summaryEdited = false
+        categoriesEdited = false
         if dateSource == .manual { dateSource = .today }
         startAnalysis()
     }
@@ -377,12 +385,14 @@ final class ScanSession {
             }
             suggestionState = .suggesting
             do {
-                let suggestion = try await Summarizer.suggest(for: text)
+                let suggestion = try await Summarizer.suggest(for: text, knownCategories: model.knownCategories)
                 if Task.isCancelled { return }
                 withoutEditTracking {
                     if !titleEdited { title = suggestion.title }
                     if !summaryEdited { summary = suggestion.summary }
+                    if !categoriesEdited { categories = suggestion.categories }
                 }
+                categoriesDecided = true
                 if dateSource != .manual, let date = suggestion.date {
                     applyDate(date)
                     dateFromAI = true
@@ -452,6 +462,8 @@ final class ScanSession {
         let date = documentDate
         let title = title.trimmingCharacters(in: .whitespacesAndNewlines)
         let summary = summary.trimmingCharacters(in: .whitespacesAndNewlines)
+        // ohne Vorschlag und ohne Eingabe: noch nicht kategorisiert (später per „Kategorien erzeugen“)
+        let categories: [String]? = categoriesDecided || categoriesEdited ? categories : nil
         let ids = pages.map(\.id)
         let dpi = Double(dpi)
         let preset = SettingsKey.preset(SettingsKey.scanPreset)
@@ -530,6 +542,7 @@ final class ScanSession {
                     number: 0, documentDate: date, dateSource: metaDateSource, titleSource: titleSource,
                     titleUpdated: title.isEmpty ? nil : Date(), archivedAt: Date(), source: .scan, scan: scanInfo,
                     pages: textSources, ocr: .init(), issues: issues, storage: .created)
+                meta.categories = categories
                 let pagesToSave = pdfPages
                 let draft = meta
                 let saved = try await Task.detached(priority: .userInitiated) { () throws -> (number: Int, url: URL, meta: DocumentMetadata) in

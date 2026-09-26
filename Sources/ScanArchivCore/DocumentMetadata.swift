@@ -102,6 +102,8 @@ public struct DocumentMetadata: Codable, Equatable, Sendable {
     public var storage: Storage?
     /// Beim Import laut Seitenzahlen umsortiert: Indizes (ab 0) der Originalseiten in neuer Reihenfolge
     public var pageOrder: [Int]?
+    /// Kategorien als Pfade („Absender/DAK“, „Rechnung“); nil = noch nicht kategorisiert
+    public var categories: [String]?
 
     /// Aktuelle Programmversion; die App setzt sie beim Start aus dem Bundle (z. B. „ScanArchiv 1.1 (Build 202609191030)“).
     nonisolated(unsafe) public static var appName = "ScanArchiv"
@@ -166,7 +168,7 @@ public enum PDFMetadata {
         attributes[PDFDocumentAttribute.titleAttribute] = title.isEmpty
             ? Archive.fileName(date: meta.documentDate, number: meta.number).replacingOccurrences(of: ".pdf", with: "") : title
         attributes[PDFDocumentAttribute.subjectAttribute] = summary
-        attributes[PDFDocumentAttribute.keywordsAttribute] = [numberText, "Nr. \(numberText)"]
+        attributes[PDFDocumentAttribute.keywordsAttribute] = [numberText, "Nr. \(numberText)"] + (meta.categories ?? [])
         attributes[PDFDocumentAttribute.creatorAttribute] = meta.app
         attributes[PDFDocumentAttribute.creationDateAttribute] = meta.archivedAt
         document.documentAttributes = attributes

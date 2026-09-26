@@ -83,6 +83,30 @@ Originalauflösung und Farbe, Links und Lesezeichen bleiben erhalten. Seiten mit
 Bild sind, bekommen eine unsichtbare OCR-Textebene. Hinzu kommen nur der rote Stempel und die Metadaten.
 Für Titel, Beschreibung und Datum werden die ersten zwei Seiten verwendet.
 
+## Kategorien
+
+Jedes Dokument bekommt beim Scannen und Importieren eine oder mehrere **Kategorien**, die Apple Intelligence
+selbst bestimmt: Art und Thema (z. B. „Rechnung“, „Bescheid“, „Krankenkasse“, „Rente“) und den Absender als
+Unterkategorie von „Absender“ (z. B. „Absender › DAK“). Das Programm bevorzugt vorhandene Kategorien und eine
+mitgelieferte Startliste mit kurzer Beschreibung je Kategorie. Neue legt es nur an, wenn nichts passt (höchstens
+eine je Dokument). Schreibweisen gleicht es an („Rechnungen“ → „Rechnung“, „Stromrechnung“ → „Rechnung“,
+„DAK-Gesundheit“ → „DAK“). Themen wie „Wohnen“ oder „Krankenkasse“ bleiben nur, wenn der Text passende Wörter
+enthält (z. B. Miete, Nebenkosten, Hausverwaltung); so landet der Rundfunkbeitrag nicht unter „Wohnen“.
+
+- Die Leiste **über den Tags** zeigt die Kategorien mit ihrer Trefferzahl unter dem aktuellen Filter. Eine
+  Oberkategorie mit Unterkategorien öffnet ein Menü („Alle: Absender“, „DAK“, „TK“ …).
+- Ausgewählte Kategorien erscheinen als Chips mit ✕. Sie werden mit dem Suchfeld und den Tags **UND-verknüpft**.
+  „Absender › DAK“ + „Rechnung“ zeigt also alle Rechnungen der DAK. Eine Oberkategorie trifft auch alle
+  Unterkategorien.
+- Kategorien lassen sich in der Scan-Vorschau und unter „Bearbeiten …“ ändern. Mit `Ober/Unter` entsteht eine
+  Unterkategorie (z. B. `Versicherung/KFZ`).
+- Rechtsklick auf eine Kategorie in der Leiste bietet „Umbenennen …“ (bei einem vorhandenen Namen werden beide
+  zusammengeführt) und „Aus allen Dokumenten entfernen …“.
+- Ältere Dokumente ohne Kategorien lassen sich mit **„Kategorien erzeugen“** nachträglich einordnen. Titel,
+  Beschreibung und Datum bleiben dabei unverändert.
+- Anders als Tags stehen Kategorien **im PDF** (Metadaten und PDF-Schlüsselwörter für Spotlight). Das Suchfeld
+  findet sie ebenfalls.
+
 ## Tags (gespeicherte Suchen)
 
 Über dem Suchfeld im Archiv stehen **Tags**: benannte Suchen wie „Rente“ mit dem Ausdruck

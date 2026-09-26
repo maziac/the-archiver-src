@@ -253,7 +253,8 @@ public enum ImportProcessor {
         } else {
             progress("Titel und Beschreibung")
             do {
-                suggestion = try await Summarizer.suggest(for: firstText)
+                let known = Categories.vocabulary(existing: (try? index.allCategories()) ?? [])
+                suggestion = try await Summarizer.suggest(for: firstText, knownCategories: known)
             } catch {
                 issues.append(.noSuggestion(error.localizedDescription))
             }
@@ -283,6 +284,7 @@ public enum ImportProcessor {
             archivedAt: Date(), source: source, originalFileName: name, originalSize: fileData.count, originalSHA256: sha,
             pages: textSources, ocr: usesOCR ? DocumentMetadata.OCRInfo() : nil, issues: issues)
         meta.pageOrder = pageOrder
+        meta.categories = suggestion?.categories
         let finalMeta = meta
 
         progress("Speichern")

@@ -160,14 +160,41 @@ final class AppModel {
         tags = tagStore.all
     }
 
+    // MARK: Kategorien
+
+    /// Startliste und alle im Archiv vergebenen Kategorien – Vorschläge für Eingabe und Apple Intelligence.
+    var knownCategories: [String] {
+        _ = revision
+        return Categories.vocabulary(existing: (try? index?.allCategories()) ?? [])
+    }
+
+    /// Benennt eine Kategorie (samt Unterkategorien) in allen Dokumenten um; nil entfernt sie.
+    /// Gibt es den neuen Namen schon, werden beide zusammengeführt.
+    func renameCategory(_ old: String, to new: String?) async throws {
+        guard let archive, let index else { return }
+        let new = new.map(Categories.cleanPath)
+        try await Task.detached {
+            for record in try index.records(inCategory: old) {
+                guard let changed = Categories.renamed(record.categories, from: old, to: new) else { continue }
+                let result = try archive.updateMetadata(url: record.url, date: record.date, title: record.title,
+                                                        summary: record.summary) { $0.categories = changed }
+                try index.update(oldPath: record.path, newURL: result.url, date: record.date, title: record.title,
+                                 summary: record.summary, meta: result.meta)
+            }
+        }.value
+        revision += 1
+    }
+
     // MARK: Titel/Beschreibung/Datum bearbeiten
 
     /// Schreibt die Angaben ins PDF (inkl. ScanArchiv-Metadaten), benennt die Datei um und aktualisiert den Index.
     /// - titleSource: neue Herkunft von Titel/Beschreibung (nil = unverändert)
     /// - dateSource: neue Herkunft des Datums (nil = unverändert)
     /// Erledigte Probleme verschwinden: Titel gesetzt → `.noSuggestion`, Datum bestätigt → `.noDate`.
+    /// - categories: neue Kategorien (nil = unverändert)
     func updateDocument(path: String, date: Date, title: String, summary: String,
-                        titleSource: DocumentMetadata.TitleSource?, dateSource: DocumentMetadata.DateSource?) async throws {
+                        titleSource: DocumentMetadata.TitleSource?, dateSource: DocumentMetadata.DateSource?,
+                        categories: [String]? = nil) async throws {
         guard let archive, let index else { return }
         let title = title.trimmingCharacters(in: .whitespacesAndNewlines)
         let summary = summary.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -178,6 +205,7 @@ final class AppModel {
                     meta.titleUpdated = Date()
                 }
                 if let dateSource { meta.dateSource = dateSource }
+                if let categories { meta.categories = categories }
                 meta.issues.removeAll { issue in
                     switch issue {
                     case .noSuggestion: return !title.isEmpty
@@ -251,7 +279,8 @@ final class AppModel {
     func suggestion(forPath path: String) async throws -> DocumentSuggestion {
         guard let index else { throw SummarizerError.failed("Kein Archiv geöffnet.") }
         let fallback = try index.fullText(path: path)
-        return try await Summarizer.suggest(for: await Self.suggestionText(path: path, fallback: fallback))
+        return try await Summarizer.suggest(for: await Self.suggestionText(path: path, fallback: fallback),
+                                            knownCategories: knownCategories)
     }
 
     /// Text der ersten Seiten (wie beim Scannen) – schneller und für Titel/Datum ausreichend.
@@ -265,9 +294,11 @@ final class AppModel {
         }.value
     }
 
-    // MARK: Titel für vorhandene Dokumente nachtragen
+    // MARK: Titel und Kategorien für vorhandene Dokumente nachtragen
 
     struct TitleBatch: Equatable {
+        enum Kind { case titles, categories }
+        var kind: Kind
         var done = 0
         var total = 0
         var failed = 0
@@ -283,22 +314,46 @@ final class AppModel {
         return (try? index?.countWithoutTitle()) ?? 0
     }
 
+    var missingCategoriesCount: Int {
+        _ = revision
+        return (try? index?.countWithoutCategories()) ?? 0
+    }
+
+    /// Titel, Beschreibung und Datum (und fehlende Kategorien) für Dokumente ohne Titel erzeugen.
     func generateMissingTitles() {
-        guard titleBatchTask == nil, let index else { return }
-        let records = (try? index.recordsWithoutTitle()) ?? []
-        guard !records.isEmpty else { return }
-        titleBatch = TitleBatch(total: records.count)
+        guard let index else { return }
+        runBatch(.titles, records: (try? index.recordsWithoutTitle()) ?? [])
+    }
+
+    /// Nur Kategorien für noch nicht kategorisierte Dokumente erzeugen; Titel und Datum bleiben.
+    func generateMissingCategories() {
+        guard let index else { return }
+        runBatch(.categories, records: (try? index.recordsWithoutCategories()) ?? [])
+    }
+
+    private func runBatch(_ kind: TitleBatch.Kind, records: [(path: String, text: String)]) {
+        guard titleBatchTask == nil, let index, !records.isEmpty else { return }
+        titleBatch = TitleBatch(kind: kind, total: records.count)
         titleBatchResult = nil
         titleBatchTask = Task {
             for record in records {
                 if Task.isCancelled { break }
                 do {
                     let text = await Self.suggestionText(path: record.path, fallback: record.text)
-                    let suggestion = try await Summarizer.suggest(for: text)
-                    let fileName = URL(fileURLWithPath: record.path).lastPathComponent
-                    let date = suggestion.date ?? Archive.parse(fileName: fileName)?.date ?? Date()
-                    try await updateDocument(path: record.path, date: date, title: suggestion.title, summary: suggestion.summary,
-                                             titleSource: .ai, dateSource: suggestion.date != nil ? .ai : nil)
+                    let suggestion = try await Summarizer.suggest(for: text, knownCategories: knownCategories)
+                    guard let current = try index.record(path: record.path)
+                    else { throw SummarizerError.failed("Dokument nicht mehr im Index.") }
+                    switch kind {
+                    case .titles:
+                        let date = suggestion.date ?? current.date
+                        try await updateDocument(path: record.path, date: date, title: suggestion.title, summary: suggestion.summary,
+                                                 titleSource: .ai, dateSource: suggestion.date != nil ? .ai : nil,
+                                                 categories: current.meta?.categories == nil ? suggestion.categories : nil)
+                    case .categories:
+                        try await updateDocument(path: record.path, date: current.date, title: current.title,
+                                                 summary: current.summary, titleSource: nil, dateSource: nil,
+                                                 categories: suggestion.categories)
+                    }
                 } catch {
                     titleBatch?.failed += 1
                 }
@@ -306,7 +361,8 @@ final class AppModel {
             }
             if let batch = titleBatch {
                 let ok = batch.done - batch.failed
-                titleBatchResult = "\(ok) Titel erzeugt" + (batch.failed > 0 ? ", \(batch.failed) ohne Vorschlag" : "")
+                let what = batch.kind == .titles ? "Titel erzeugt" : "Dokument(e) kategorisiert"
+                titleBatchResult = "\(ok) \(what)" + (batch.failed > 0 ? ", \(batch.failed) ohne Vorschlag" : "")
             }
             titleBatchTask = nil
             titleBatch = nil
