@@ -79,7 +79,7 @@ struct CategoryTests {
         let prompt = Summarizer.prompt(modelText: "Text", known: ["Rechnung", "Versicherung/KFZ", "Absender/DAK"])
         #expect(prompt.contains("\n- Rechnung: Zahlungsaufforderung"))
         #expect(prompt.contains("\n- Versicherung/KFZ\n"))  // eigene Kategorie ohne Beschreibung
-        #expect(prompt.hasPrefix("Dokumenttext:\nText\n"))
+        #expect(prompt.hasPrefix(Summarizer.promptLead + "\n\nDokumenttext:\nText\n"))
         #expect(prompt.hasSuffix("Bekannte Absender: DAK\n"))
     }
 

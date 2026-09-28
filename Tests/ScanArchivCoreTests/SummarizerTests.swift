@@ -20,6 +20,52 @@ struct SummarizerTests {
         #expect(suggestion.date.map { Archive.formatDate($0) } == "2026-09-18", "Datum: \(String(describing: suggestion.date))")
         print("Vorschlag:", suggestion.title, "|", suggestion.summary)
     }
+
+    /// Wurde ohne einleitenden Auftrag als Indonesisch erkannt („kita“) → „Sprache nicht unterstützt“.
+    @Test(.enabled(if: Summarizer.isAvailable, "Apple Intelligence nicht verfügbar"))
+    func acceptsGermanLetterMistakenForIndonesian() async throws {
+        let text = """
+            Nr. 000006 · 01.09.2025
+            Kita Regenbogen
+            Kita Regenbogen e. V. · Wiesenweg 4 · 12345 Musterstadt
+            Max Mustermann
+            Lindenweg 12
+            12345 Musterstadt
+            Musterstadt, 01.09.2025
+            Beitragsbescheid Betreuungsjahr 2025/2026 – Emma Mustermann
+            Liebe Familie Mustermann,
+            für die Betreuung Ihrer Tochter Emma ab dem 01.09.2025 gilt:
+            Betreuungsbeitrag: 185,00 EUR monatlich
+            Verpflegung: 62,00 EUR monatlich
+            Die Beiträge werden zum Monatsersten abgebucht.
+            Herzliche Grüße
+            Ihr Kita-Team Regenbogen
+            Seite 1 von 1
+            """
+        let suggestion = try await Summarizer.suggest(for: text)
+        #expect(!suggestion.title.isEmpty)
+        print("Vorschlag:", suggestion.title, "|", suggestion.summary, "|", suggestion.categories ?? [])
+    }
+
+    /// Der deutsche Einleitungssatz darf englische Briefe nicht stören.
+    @Test(.enabled(if: Summarizer.isAvailable, "Apple Intelligence nicht verfügbar"))
+    func handlesEnglishLetter() async throws {
+        let text = """
+            Miller Consulting Ltd · 12 High Street · London SW1A 1AA
+            Mr. John Smith, 5 Oak Road, Bristol BS1 4DJ
+            London, 14 March 2026
+            Invoice No. 2026-031
+            Dear Mr. Smith,
+            thank you for your order. Please find enclosed the invoice for the consulting services provided in February.
+            The total amount of 1,250.00 GBP is due within 30 days.
+            Kind regards
+            Jane Miller
+            """
+        let suggestion = try await Summarizer.suggest(for: text)
+        #expect(!suggestion.title.isEmpty)
+        #expect(suggestion.date.map { Archive.formatDate($0) } == "2026-03-14", "Datum: \(String(describing: suggestion.date))")
+        print("Vorschlag:", suggestion.title, "|", suggestion.summary, "|", suggestion.categories ?? [])
+    }
 }
 
 struct ModelTextCleaningTests {

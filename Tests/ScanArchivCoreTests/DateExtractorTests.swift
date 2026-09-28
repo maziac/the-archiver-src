@@ -19,6 +19,23 @@ struct DateExtractorTests {
         #expect(dates.map(ymd) == ["2026-09-18", "2026-03-01", "2025-09-05", "2025-10-07"])
     }
 
+    @Test func englishMonthNames() {
+        let text = "London, 14 March 2026 – due 1st of May, 2026, sent Mar 3rd 2026, paid August 5, 2025, Oct. 7 2025"
+        let dates = DateExtractor.candidates(in: text, now: now)
+        #expect(dates.map(ymd) == ["2026-03-14", "2026-05-01", "2026-03-03", "2025-08-05", "2025-10-07"])
+    }
+
+    @Test func americanNumericOnlyWhenUnambiguous() {
+        // 03/14/2026 geht nur als Monat/Tag; 03/04/2026 bleibt deutsch gelesen (3. April)
+        let dates = DateExtractor.candidates(in: "03/14/2026 und 03/04/2026", now: now)
+        #expect(dates.map(ymd) == ["2026-03-14", "2026-04-03"])
+        #expect(DateExtractor.candidates(in: "14.13.2026", now: now).isEmpty)
+    }
+
+    @Test func noFalseEnglishDates() {
+        #expect(DateExtractor.candidates(in: "Seite 1 von 2026, Punkte 12 2026, Rechnung Nr 14 2026", now: now).isEmpty)
+    }
+
     @Test func isoFormat() {
         #expect(ymd(DateExtractor.bestGuess(in: "Datum: 2026-09-01", now: now)) == "2026-09-01")
     }

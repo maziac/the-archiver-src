@@ -163,12 +163,19 @@ public enum Summarizer {
     }
     #endif
 
-    /// Anfrage an das Modell: Dokumenttext, dann vorhandene Kategorien und Absender.
+    /// Einleitender deutscher Satz der Anfrage. Apple Intelligence bestimmt die Sprache vor allem am Anfang
+    /// der Anfrage; kurze Briefe mit Namen wie „Kita Regenbogen“ hielt es sonst für Indonesisch
+    /// („kita“ = „wir“) und lehnte sie als nicht unterstützte Sprache ab. Der Satz macht die Anfrage für die
+    /// Spracherkennung deutsch; der Dokumenttext darf trotzdem englisch o. Ä. sein, die Antwort bleibt laut
+    /// `instructions` deutsch. Deshalb sagt er nichts über die Sprache des Dokuments.
+    static let promptLead = "Erstelle Titel, Zusammenfassung, Datum und Kategorien für dieses Dokument."
+
+    /// Anfrage an das Modell: Auftrag, Dokumenttext, dann vorhandene Kategorien und Absender.
     static func prompt(modelText: String, known: [String]) -> String {
         let senders = Categories.senders(in: known)
         let kinds = known.filter { Categories.expanded([$0]).first != Categories.senderRoot }
-        // Dokumenttext zuerst: eine lange Liste davor lenkt das Modell z. B. beim Datum ab
-        var prompt = "Dokumenttext:\n\(String(modelText.prefix(maxCharacters)))\n"
+        // Dokumenttext vor den Listen: eine lange Liste davor lenkt das Modell z. B. beim Datum ab
+        var prompt = "\(promptLead)\n\nDokumenttext:\n\(String(modelText.prefix(maxCharacters)))\n"
         if !kinds.isEmpty {
             prompt += "\nVorhandene Kategorien (nur vergeben, wenn die Beschreibung eindeutig zutrifft):\n"
             for kind in kinds {
