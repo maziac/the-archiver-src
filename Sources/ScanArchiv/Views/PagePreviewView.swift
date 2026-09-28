@@ -9,8 +9,16 @@ struct PagePreviewView: View {
     var body: some View {
         VStack(spacing: 0) {
             HStack {
+                if session.documentCount > 1 {
+                    Text("Dokument \(session.documentNumber) von \(session.documentCount)")
+                        .font(.headline)
+                }
                 Text("\(session.pages.count) Seite(n)")
                     .font(.headline)
+                if session.removedShowThrough > 0, session.documentCount <= 1 {
+                    Text(showThroughNote(session.removedShowThrough))
+                        .foregroundStyle(.secondary)
+                }
                 Text("Klick dreht um 180°, Rechtsklick um 90°. Ziehen ändert die Reihenfolge.")
                     .foregroundStyle(.secondary)
                 Spacer()
@@ -18,8 +26,19 @@ struct PagePreviewView: View {
                 Button("Seite scannen", systemImage: "plus.viewfinder") { session.scanSinglePage() }
                     .help("Eine weitere Seite scannen und hinten anhängen")
                     .disabled(!session.scanner.isReady)
-                Button("Verwerfen", role: .destructive) { session.reset() }
-                Button("Speichern") { session.save() }
+                if session.documentCount > 1 {
+                    Button("Rest verwerfen", role: .destructive) { session.reset() }
+                        .help("Dieses und alle folgenden Dokumente des Stapels verwerfen")
+                    Button("Überspringen") { session.skipDocument() }
+                        .help("Dieses Dokument nicht speichern und zum nächsten wechseln")
+                } else {
+                    Button("Verwerfen", role: .destructive) { session.reset() }
+                }
+                if session.hasMoreDocuments {
+                    Button("Alle speichern") { session.saveAll() }
+                        .help("Dieses und alle folgenden Dokumente mit den vorgeschlagenen Titeln, Daten und Kategorien speichern")
+                }
+                Button(session.hasMoreDocuments ? "Speichern und weiter" : "Speichern") { session.save() }
                     .keyboardShortcut(.defaultAction)
                     .disabled(session.pages.isEmpty)
             }
@@ -43,6 +62,12 @@ struct PagePreviewView: View {
             }
         }
     }
+}
+
+/// Hinweis auf entfernte Rückseiten mit durchscheinender Vorderseite.
+func showThroughNote(_ count: Int) -> String {
+    count == 1 ? "1 Rückseite mit durchscheinender Vorderseite entfernt."
+        : "\(count) Rückseiten mit durchscheinender Vorderseite entfernt."
 }
 
 /// Gelber Hinweis, wenn die gedruckten Seitenzahlen nicht zur Reihenfolge passen.

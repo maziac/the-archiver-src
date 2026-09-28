@@ -58,7 +58,7 @@ struct ScanView: View {
 
     private var isBusy: Bool {
         switch session.phase {
-        case .scanningFronts, .scanningBacks, .scanningSingle, .processing: return true
+        case .scanningFronts, .scanningBacks, .scanningSingle, .processing, .analyzingStack: return true
         default: return false
         }
     }
@@ -83,7 +83,10 @@ struct ScanView: View {
                     .help("Alle Blätter im Einzug scannen; beidseitige Blätter danach wenden")
                     .disabled(!scanner.isReady || !scanner.sources.contains(.feeder))
             } footer: {
-                sourcePicker
+                VStack(spacing: 12) {
+                    splitToggle
+                    sourcePicker
+                }
             }
             .importDrop(inbox) { model.selectedTab = .inbox }  // beim Scannen sieht man den Fortschritt sonst nicht
 
@@ -103,12 +106,19 @@ struct ScanView: View {
                 step: "Schritt 2 von 2",
                 icon: "arrow.triangle.2.circlepath",
                 title: "\(session.fronts.count) Vorderseite(n) gescannt – jetzt wenden",
-                text: "Nimm den Stapel aus der Ablage, drehe ihn als Ganzes um (Reihenfolge nicht ändern!) und lege ihn wieder in den Einzug.")
+                text: (session.feederNote.map { "⚠︎ \($0)\n" } ?? "")
+                    + "Nimm den Stapel aus der Ablage, drehe ihn als Ganzes um (Reihenfolge nicht ändern!) und lege ihn wieder in den Einzug.\n"
+                    + "Stimmt die Zahl nicht, weil der Scanner vorzeitig aufgehört hat? Dann die übrigen Blätter (ohne die ersten \(session.fronts.count)) wieder einlegen und „Weitere Vorderseiten“ wählen.")
             {
+                Button("Weitere Vorderseiten") { session.scanMoreFronts() }
+                    .help("Die noch nicht gescannten Blätter erneut einlegen; sie werden hinten angehängt")
+                    .disabled(!scanner.isReady)
                 Button("Nur einseitig – fertig") { session.finishSimplex() }
                 Button("Rückseiten scannen") { session.scanBacks() }
                     .keyboardShortcut(.defaultAction)
                     .disabled(!scanner.isReady)
+            } footer: {
+                splitToggle
             }
 
         case let .countMismatch(fronts, backs):
@@ -116,12 +126,22 @@ struct ScanView: View {
                 step: "Achtung",
                 icon: "exclamationmark.triangle",
                 title: "Seitenzahl passt nicht",
-                text: "Es wurden \(fronts) Vorderseite(n), aber \(backs) Rückseite(n) gescannt. Wurde ein Blatt doppelt eingezogen oder fehlt eines?")
+                text: "Es wurden \(fronts) Vorderseite(n), aber \(backs) Rückseite(n) gescannt. Wurde ein Blatt doppelt eingezogen oder fehlt eines?"
+                    + (backs < fronts && backs > 0
+                       ? "\n\nHat der Scanner vorzeitig aufgehört? Dann den Stapel wieder so einlegen wie eben, aber ohne die ersten \(backs) Blätter, und „Fehlende Rückseiten scannen“ wählen."
+                       : ""))
             {
                 Button("Abbrechen", role: .cancel) { session.reset() }
                 Button("Trotzdem zusammenführen") { session.acceptMismatch() }
-                Button("Rückseiten erneut scannen") { session.scanBacks() }
-                    .keyboardShortcut(.defaultAction)
+                if backs < fronts, backs > 0 {
+                    Button("Fehlende Rückseiten scannen") { session.scanMissingBacks() }
+                        .help("Die Blätter ohne gescannte Rückseite erneut einlegen; sie werden an die bisherigen Rückseiten angehängt")
+                        .keyboardShortcut(.defaultAction)
+                    Button("Rückseiten erneut scannen") { session.scanBacks() }
+                } else {
+                    Button("Rückseiten erneut scannen") { session.scanBacks() }
+                        .keyboardShortcut(.defaultAction)
+                }
             }
 
         case .singleNext:
@@ -158,6 +178,21 @@ struct ScanView: View {
                 }
             }
 
+        case let .analyzingStack(done, total):
+            VStack(spacing: 16) {
+                ProgressView(value: Double(done), total: Double(max(total, 1)))
+                    .frame(maxWidth: 320)
+                Text("Stapel wird aufgeteilt …")
+                    .font(.title2)
+                Text("Texterkennung Seite \(min(done + 1, total)) von \(total)")
+                    .foregroundStyle(.secondary)
+                    .monospacedDigit()
+                Button("Abbrechen") { session.reset() }
+            }
+
+        case .splitReview:
+            StackSplitView(session: session)
+
         case .preview:
             PagePreviewView(session: session)
 
@@ -171,11 +206,16 @@ struct ScanView: View {
             Instruction(
                 step: "Fertig",
                 icon: "checkmark.circle",
-                title: "Gespeichert als \(url.lastPathComponent)",
+                title: session.savedURLs.count > 1
+                    ? "\(session.savedURLs.count) Dokumente gespeichert"
+                    : "Gespeichert als \(url.lastPathComponent)",
                 text: ([url.deletingLastPathComponent().path]
+                       + (session.savedURLs.count > 1 ? session.savedURLs.map(\.lastPathComponent) : [])
                        + session.savedIssues.map { "⚠︎ " + $0.message }).joined(separator: "\n"))
             {
-                Button("Im Finder zeigen") { NSWorkspace.shared.activateFileViewerSelecting([url]) }
+                Button("Im Finder zeigen") {
+                    NSWorkspace.shared.activateFileViewerSelecting(session.savedURLs.isEmpty ? [url] : session.savedURLs)
+                }
                 Button("Öffnen") { NSWorkspace.shared.open(url) }
                 Button("Neuer Scan") { session.reset() }
                     .keyboardShortcut(.defaultAction)
@@ -198,6 +238,12 @@ struct ScanView: View {
         case .scanningBacks: return "Rückseiten werden gescannt …"
         default: return "Seite \(session.pages.count + 1) wird gescannt …"
         }
+    }
+
+    /// Stapel nach dem Scan in einzelne Dokumente aufteilen
+    private var splitToggle: some View {
+        Toggle("Mehrere Dokumente im Stapel aufteilen", isOn: $session.splitStack)
+            .help("Nach dem Scan werden Trennstellen zwischen den Briefen vorgeschlagen (zum Prüfen). Ein beidseitig leeres Blatt zwischen zwei Briefen trennt sicher.")
     }
 
     /// Quelle für „Seite für Seite“ – nur wenn der Scanner Einzug und Vorlagenglas hat.

@@ -63,6 +63,9 @@ FoundationModels **weak-linked**), `ScanArchiv` (SwiftUI-App, Scanner, Eingangso
 - `Categories` – Kategorien als Pfade (`Absender/DAK`) in `DocumentMetadata.categories` (nil = noch nicht
   kategorisiert); Apple Intelligence schlägt sie mit Titel/Datum vor, `normalize` gleicht an vorhandene an.
   Index-Spalte `categories` enthält alle Oberkategorien (`\nA\nA/B\n`).
+- `DocumentSplitter` – Stapel mit mehreren Briefen aufteilen: Entscheidung je Blattgrenze (Seitenzahlen,
+  Merkmale einer ersten Seite, Grußformel, Kopf-/Fußzeile; beidseitig leeres Blatt = Trennblatt) und
+  blattweise Sortierung. Messung am echten Archiv: `SCANARCHIV_EVAL=<Archiv> swift test --filter DocumentSplitterEval`.
 - Kleinteile: `OCRService`, `Summarizer`, `DateExtractor`, `FileDate`, `PageNumbering`, `BlankPage`,
   `PageOrder`, `ImagesToPDF`, `FolderScan`, `TagQuery`/`TagStore`, `DocumentMetadata`/`PDFMetadata`,
   `DocumentIssue`, `DocumentInfo`.
