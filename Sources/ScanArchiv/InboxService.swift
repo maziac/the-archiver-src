@@ -96,8 +96,8 @@ final class InboxService {
     /// (Neu) starten mit dem Ordner aus den Einstellungen; liest vorhandene Dateien sofort ein.
     func start() {
         stop()
-        let path = UserDefaults.standard.string(forKey: SettingsKey.inboxPath) ?? SettingsKey.defaultInboxPath
-        let folder = URL(fileURLWithPath: path, isDirectory: true)
+        let folder = FolderAccess.resolve(key: SettingsKey.inboxPath, defaultPath: SettingsKey.defaultInboxPath)
+        let path = folder.path
         do {
             try FileManager.default.createDirectory(at: folder.appendingPathComponent(Self.errorFolderName),
                                                     withIntermediateDirectories: true)

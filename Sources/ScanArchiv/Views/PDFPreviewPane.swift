@@ -273,7 +273,7 @@ private struct DocumentInfoView: View {
         VStack(alignment: .leading, spacing: 10) {
             Text(meta.map { "Nr. \(Archive.formatNumber($0.number))" } ?? "Dokument").font(.headline)
             if meta == nil {
-                Text("Keine ScanArchiv-Informationen (fremdes PDF).").foregroundStyle(.secondary)
+                Text("Keine Archiv-Informationen (fremdes PDF).").foregroundStyle(.secondary)
             }
             Grid(alignment: .leadingFirstTextBaseline, horizontalSpacing: 12, verticalSpacing: 6) {
                 ForEach(DocumentInfo.lines(meta: meta, fileSize: url.flatMap(DocumentInfo.fileSize), pageCount: pageCount),

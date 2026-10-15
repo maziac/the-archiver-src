@@ -211,7 +211,7 @@ public final class Archive: @unchecked Sendable {
         lock.lock(); defer { lock.unlock() }
         let data = try Data(contentsOf: url)
         guard let pdf = PDFDocument(data: data), var meta = PDFMetadata.read(pdf) else {
-            throw ArchiveError.cannotRearrange(url, "keine ScanArchiv-Metadaten")
+            throw ArchiveError.cannotRearrange(url, "keine Archiv-Metadaten")
         }
         let count = pdf.pageCount
         guard order.count == count, order.sorted() == Array(0..<count), rotations.count == count else {

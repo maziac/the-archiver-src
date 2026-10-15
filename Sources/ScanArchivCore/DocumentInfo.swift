@@ -74,7 +74,7 @@ public enum DocumentInfo {
     /// Mehrzeiliger Text für Tooltips.
     public static func tooltip(meta: DocumentMetadata?, fileName: String, fileSize: Int?, pageCount: Int) -> String {
         var parts = [fileName, ""]
-        if meta == nil { parts.append("Keine ScanArchiv-Informationen (fremdes PDF).") }
+        if meta == nil { parts.append("Keine Archiv-Informationen (fremdes PDF).") }
         parts += lines(meta: meta, fileSize: fileSize, pageCount: pageCount).map { "\($0.label): \($0.value)" }
         if let issues = meta?.issues, !issues.isEmpty {
             parts.append("")
@@ -112,7 +112,7 @@ public enum DocumentInfo {
         case .appended: return "Original unverändert, Zusätze angehängt"
         case .rewritten: return "neu geschrieben (war kleiner als Anhängen)"
         case .rebuilt: return "Seiten neu erzeugt (Kompression)"
-        case .created: return "von ScanArchiv erstellt"
+        case .created: return "von The Archiver erstellt"
         }
     }
 

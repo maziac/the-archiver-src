@@ -68,7 +68,7 @@ public enum PDFBuilder {
             kCGPDFContextTitle: title.isEmpty ? fallbackTitle : title,
             kCGPDFContextSubject: summary.isEmpty ? stampText(number: number, date: date) : summary,
             kCGPDFContextKeywords: [numberText, "Nr. \(numberText)"] as CFArray,
-            kCGPDFContextCreator: "ScanArchiv",
+            kCGPDFContextCreator: "The Archiver",
         ]
         guard let consumer = CGDataConsumer(data: data as CFMutableData),
               let ctx = CGContext(consumer: consumer, mediaBox: nil, info as CFDictionary) else {

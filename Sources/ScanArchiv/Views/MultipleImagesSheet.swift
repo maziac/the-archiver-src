@@ -29,7 +29,7 @@ struct MultipleImagesSheet: View {
                 Text("Reihenfolge nach Dateiname")
             }
 
-            Text("Beim Verbinden entsteht ein PDF mit einer Seite je Bild. Texterkennung, Titel, Datum und Nummer vergibt ScanArchiv danach wie gewohnt.")
+            Text("Beim Verbinden entsteht ein PDF mit einer Seite je Bild. Texterkennung, Titel, Datum und Nummer vergibt The Archiver danach wie gewohnt.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)

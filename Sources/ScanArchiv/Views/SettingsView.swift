@@ -22,8 +22,8 @@ struct SettingsView: View {
                     HStack {
                         Text(archivePath).lineLimit(1).truncationMode(.middle)
                         Button("Wählen …") {
-                            if let path = chooseFolder(startingAt: archivePath) {
-                                archivePath = path
+                            if let url = chooseFolder(startingAt: archivePath) {
+                                FolderAccess.store(url, forKey: SettingsKey.archivePath)
                                 model.openArchive()
                                 inbox.start()
                             }
@@ -36,8 +36,8 @@ struct SettingsView: View {
                     HStack {
                         Text(inboxPath).lineLimit(1).truncationMode(.middle)
                         Button("Wählen …") {
-                            if let path = chooseFolder(startingAt: inboxPath) {
-                                inboxPath = path
+                            if let url = chooseFolder(startingAt: inboxPath) {
+                                FolderAccess.store(url, forKey: SettingsKey.inboxPath)
                                 inbox.start()
                             }
                         }
@@ -96,12 +96,12 @@ struct SettingsView: View {
         }
     }
 
-    private func chooseFolder(startingAt path: String) -> String? {
+    private func chooseFolder(startingAt path: String) -> URL? {
         let panel = NSOpenPanel()
         panel.canChooseDirectories = true
         panel.canChooseFiles = false
         panel.canCreateDirectories = true
         panel.directoryURL = URL(fileURLWithPath: path)
-        return panel.runModal() == .OK ? panel.url?.path : nil
+        return panel.runModal() == .OK ? panel.url : nil
     }
 }

@@ -86,7 +86,7 @@ final class AppModel {
     var archivePath: String { UserDefaults.standard.string(forKey: SettingsKey.archivePath) ?? SettingsKey.defaultArchivePath }
 
     func openArchive() {
-        let folder = URL(fileURLWithPath: archivePath, isDirectory: true)
+        let folder = FolderAccess.resolve(key: SettingsKey.archivePath, defaultPath: SettingsKey.defaultArchivePath)
         do {
             let archive = try Archive(folder: folder)
             let index = try SearchIndex(url: folder.appendingPathComponent(SearchIndex.fileName))

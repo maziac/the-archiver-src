@@ -7,12 +7,17 @@ struct ScanArchivApp: App {
     @State private var session: ScanSession
     @State private var inbox: InboxService
 
-    /// Programmversion aus dem Bundle, z. B. „ScanArchiv 1.1 (Build 202609191030)“
+    /// Anzeigename aus dem Bundle („The Archiver“)
+    static var displayName: String {
+        Bundle.main.infoDictionary?["CFBundleDisplayName"] as? String ?? "The Archiver"
+    }
+
+    /// Programmversion aus dem Bundle, z. B. „The Archiver 1.1 (Build 202609191030)“
     static var versionString: String {
         let info = Bundle.main.infoDictionary
         let version = info?["CFBundleShortVersionString"] as? String ?? "?"
         let build = (info?["CFBundleVersion"] as? String).map { " (Build \($0))" } ?? ""
-        return "ScanArchiv \(version)\(build)"
+        return "\(displayName) \(version)\(build)"
     }
 
     init() {
@@ -28,7 +33,7 @@ struct ScanArchivApp: App {
     }
 
     var body: some Scene {
-        Window("ScanArchiv", id: "main") {
+        Window(Self.displayName, id: "main") {
             @Bindable var model = model
             TabView(selection: $model.selectedTab) {
                 ScanView(session: session)
