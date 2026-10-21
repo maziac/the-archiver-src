@@ -134,5 +134,6 @@ AirScan/eSCL network scanners. No login is required.
 ## Datenschutz (App Privacy)
 
 - Datenerfassung: **Keine Daten erfasst** (Data Not Collected)
-- Datenschutzrichtlinie-URL: wird von App Store Connect verlangt – eine kurze Seite „The Archiver
-  erfasst und überträgt keine Daten; alle Dokumente bleiben lokal auf dem Mac.“ genügt.
+- Support-URL: https://maziac.github.io/support/the-archiver/
+- Datenschutzrichtlinie-URL: https://maziac.github.io/support/the-archiver/privacy.html
+  (Quelle: Repo `maziac/support`, Ordner `the-archiver/`)
