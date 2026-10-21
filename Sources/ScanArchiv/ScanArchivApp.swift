@@ -1,11 +1,18 @@
 import ScanArchivCore
 import SwiftUI
 
+/// Schließen des Hauptfensters beendet die App nicht (sie bleibt im Dock bzw. in der Menüleiste)
+final class AppDelegate: NSObject, NSApplicationDelegate {
+    func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
+}
+
 @main
 struct ScanArchivApp: App {
+    @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
     @State private var model: AppModel
     @State private var session: ScanSession
     @State private var inbox: InboxService
+    @AppStorage(SettingsKey.showInMenuBar) private var showInMenuBar = false
 
     /// Programmversion aus dem Bundle, z. B. „ScanArchiv 1.1 (Build 202609191030)“
     static var versionString: String {
@@ -58,6 +65,11 @@ struct ScanArchivApp: App {
         }
         Settings {
             SettingsView()
+                .environment(model)
+                .environment(inbox)
+        }
+        MenuBarExtra("ScanArchiv", systemImage: "archivebox", isInserted: $showInMenuBar) {
+            MenuBarContent()
                 .environment(model)
                 .environment(inbox)
         }

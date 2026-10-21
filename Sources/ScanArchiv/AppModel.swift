@@ -23,6 +23,8 @@ enum SettingsKey {
     static let pdfPreset = "pdfPreset"
     static let imagePreset = "imagePreset"
     static let importColorMode = "importColorMode"
+    /// Symbol in der macOS-Menüleiste anzeigen
+    static let showInMenuBar = "showInMenuBar"
 
     static var defaultArchivePath: String {
         FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]

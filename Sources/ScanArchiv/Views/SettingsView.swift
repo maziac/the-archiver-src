@@ -14,6 +14,7 @@ struct SettingsView: View {
     @AppStorage(SettingsKey.pdfPreset) private var pdfPreset = SizePreset.original
     @AppStorage(SettingsKey.imagePreset) private var imagePreset = SizePreset.kb150
     @AppStorage(SettingsKey.importColorMode) private var importColorMode = ColorMode.original
+    @AppStorage(SettingsKey.showInMenuBar) private var showInMenuBar = false
 
     var body: some View {
         Form {
@@ -79,6 +80,15 @@ struct SettingsView: View {
                 Text("Kompression beim Import")
             } footer: {
                 Text("Umgewandelt werden nur Seiten, die ein Bild sind (Scans); Seiten mit echtem Text bleiben unverändert. Ist die umgewandelte Datei nicht kleiner, wird das Original verwendet. Schwarz-Weiß ist ideal für reine Textseiten, macht Fotos und Logos aber grob.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            Section {
+                Toggle("In der Menüleiste anzeigen", isOn: $showInMenuBar)
+            } header: {
+                Text("Menüleiste")
+            } footer: {
+                Text("Zeigt ein Symbol oben in der Menüleiste, über das sich Scannen, Eingang und Archiv direkt öffnen lassen.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
