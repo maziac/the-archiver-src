@@ -1,6 +1,6 @@
 import Foundation
 
-/// Findet Datumsangaben in (deutschem) OCR-Text.
+/// Findet Datumsangaben in (deutschem oder englischem) OCR-Text.
 public enum DateExtractor {
     private static let months: [String: Int] = [
         "januar": 1, "jan": 1, "jänner": 1, "jän": 1,
@@ -15,6 +15,9 @@ public enum DateExtractor {
         "oktober": 10, "okt": 10,
         "november": 11, "nov": 11,
         "dezember": 12, "dez": 12,
+        // englisch (soweit abweichend)
+        "january": 1, "february": 2, "march": 3, "mar": 3, "may": 5, "june": 6, "july": 7,
+        "october": 10, "oct": 10, "december": 12, "dec": 12,
     ]
 
     private static var calendar: Calendar {
@@ -25,7 +28,10 @@ public enum DateExtractor {
 
     private static let numeric = try! NSRegularExpression(pattern: #"(?<![\d.])(\d{1,2})[./](\d{1,2})[./](\d{4}|\d{2})(?![\d])"#)
     private static let iso = try! NSRegularExpression(pattern: #"(?<!\d)(\d{4})-(\d{2})-(\d{2})(?!\d)"#)
-    private static let named = try! NSRegularExpression(pattern: #"(?<!\d)(\d{1,2})\.?\s*(\p{L}{3,9})\.?\s+(\d{4}|\d{2})(?!\d)"#)
+    private static let named = try! NSRegularExpression(
+        pattern: #"(?<!\d)(\d{1,2})(?:\.|st|nd|rd|th)?\s*(?:of\s+)?(\p{L}{3,9})\.?,?\s+(\d{4}|\d{2})(?!\d)"#)
+    private static let monthFirst = try! NSRegularExpression(
+        pattern: #"(?<!\p{L})(\p{L}{3,9})\.?\s+(\d{1,2})(?:st|nd|rd|th)?,?\s+(\d{4})(?!\d)"#)
 
     /// Ruft `body` mit den Gruppen (0 = ganzer Treffer) und dem Zeichen-Offset jedes Treffers auf.
     private static func forEachMatch(_ regex: NSRegularExpression, in text: String, _ body: ([String], Int) -> Void) {
@@ -55,17 +61,22 @@ public enum DateExtractor {
             found.append((offset, date))
         }
 
-        // 18.09.2026 · 18.9.26 · 18/09/2026
+        // 18.09.2026 · 18.9.26 · 18/09/2026; amerikanisch 09/18/2026 nur, wenn Tag zuerst unmöglich ist
         forEachMatch(numeric, in: text) { g, offset in
-            if let d = Int(g[1]), let mo = Int(g[2]), let y = Int(g[3]) { add(d, mo, y, at: offset) }
+            guard let d = Int(g[1]), let mo = Int(g[2]), let y = Int(g[3]) else { return }
+            if mo > 12, d <= 12, g[0].contains("/") { add(mo, d, y, at: offset) } else { add(d, mo, y, at: offset) }
         }
         // 2026-09-18
         forEachMatch(iso, in: text) { g, offset in
             if let y = Int(g[1]), let mo = Int(g[2]), let d = Int(g[3]) { add(d, mo, y, at: offset) }
         }
-        // 18. September 2026 · 18. Sept. 2026 · 1. März 26
+        // 18. September 2026 · 18. Sept. 2026 · 1. März 26 · 14 March 2026 · 14th of March, 2026
         forEachMatch(named, in: text) { g, offset in
             if let d = Int(g[1]), let mo = months[g[2].lowercased()], let y = Int(g[3]) { add(d, mo, y, at: offset) }
+        }
+        // March 14, 2026 · Mar 14th 2026
+        forEachMatch(monthFirst, in: text) { g, offset in
+            if let mo = months[g[1].lowercased()], let d = Int(g[2]), let y = Int(g[3]) { add(d, mo, y, at: offset) }
         }
         return found.sorted { $0.offset < $1.offset }.map(\.date)
     }

@@ -54,6 +54,10 @@ final class ScanSession {
         case scanningSingle
         /// Seite für Seite: gescannt, noch eine?
         case singleNext
+        /// Stapel mit mehreren Dokumenten: Texterkennung aller Seiten (erledigt, gesamt)
+        case analyzingStack(done: Int, total: Int)
+        /// Stapel mit mehreren Dokumenten: Trennstellen prüfen
+        case splitReview
         case preview
         case processing(String)
         case saved(URL)
@@ -83,6 +87,43 @@ final class ScanSession {
     }
     /// Fehler beim letzten Einzelscan (die bisherigen Seiten bleiben erhalten)
     private(set) var singleError: String?
+    /// Hinweis nach „Weitere Vorderseiten scannen“
+    private(set) var feederNote: String?
+
+    // Stapel mit mehreren Dokumenten
+    /// Stapel nach dem Scan in einzelne Dokumente aufteilen (gemerkt)
+    var splitStack: Bool = UserDefaults.standard.bool(forKey: SettingsKey.splitStack) {
+        didSet { UserDefaults.standard.set(splitStack, forKey: SettingsKey.splitStack) }
+    }
+    /// Ein Blatt des Stapels (Seiten-IDs aus `pages`)
+    struct StackSheet: Identifiable {
+        let id: Int
+        let front: UUID
+        let back: UUID?
+    }
+    /// Blätter in Scanreihenfolge
+    private(set) var stackSheets: [StackSheet] = []
+    /// Vorschlag des Aufteilens (Trennblätter, Entscheidung je Lücke)
+    private(set) var stackAnalysis: DocumentSplitter.Analysis?
+    /// `splits[i]`: vor Blatt i + 1 beginnt ein neues Dokument (vom Benutzer änderbar)
+    var splits: [Bool] = []
+    /// Seiten für den Aufteiler (Text und Leer-Flag je Seite)
+    @ObservationIgnored private var stackPages: [UUID: DocumentSplitter.Page] = [:]
+    /// Noch zu bearbeitende Dokumente (Seiten-IDs) nach dem aktuellen
+    @ObservationIgnored private var documentQueue: [[UUID]] = []
+    /// Aktuelles Dokument (ab 1) und Anzahl beim Aufteilen; 0 = kein aufgeteilter Stapel
+    private(set) var documentNumber = 0
+    private(set) var documentCount = 0
+    /// Rückseiten, die nur die durchscheinende Vorderseite zeigten und deshalb entfernt wurden
+    private(set) var removedShowThrough = 0
+    /// Bereits gespeicherte Dateien dieses Stapels
+    private(set) var savedURLs: [URL] = []
+    /// Seiten der noch folgenden Dokumente
+    @ObservationIgnored private var stackRemainder: [ScannedPage] = []
+    /// Vorschläge für die Dokumente des Stapels, nacheinander im Voraus erzeugt (Schlüssel = Text der ersten Seiten)
+    @ObservationIgnored private var stackSuggestions: [String: Task<Result<DocumentSuggestion, Error>, Never>] = [:]
+    /// „Alle speichern“: die folgenden Dokumente ohne Rückfrage mit ihren Vorschlägen speichern
+    private(set) var savingAll = false
 
     /// Hinweis, wenn die gedruckten Seitenzahlen nicht zur Reihenfolge passen.
     enum OrderHint: Equatable {
@@ -156,20 +197,54 @@ final class ScanSession {
         }
     }
 
+    /// Weitere Vorderseiten anhängen (der Scanner hat mitten im Stapel aufgehört; die übrigen Blätter
+    /// legt der Benutzer erneut ein).
+    func scanMoreFronts() {
+        feederNote = nil
+        phase = .scanningFronts
+        let folder = workFolder.appendingPathComponent("vorne-\(UUID().uuidString.prefix(6))")
+        Task {
+            do {
+                let more = try await scanner.scanFeeder(dpi: dpi, color: color, into: folder, pagesBefore: fronts.count)
+                fronts += more
+                if more.isEmpty { feederNote = "Es wurden keine weiteren Seiten gescannt." }
+            } catch {
+                feederNote = error.localizedDescription
+            }
+            phase = .awaitingFlip
+        }
+    }
+
     func scanBacks() {
         phase = .scanningBacks
         let folder = workFolder.appendingPathComponent("hinten-\(UUID().uuidString.prefix(6))")
         Task {
             do {
                 backs = try await scanner.scanFeeder(dpi: dpi, color: color, into: folder)
-                if backs.count == fronts.count {
-                    buildPreview()
-                } else {
-                    phase = .countMismatch(fronts: fronts.count, backs: backs.count)
-                }
+                checkBackCount()
             } catch {
                 phase = .countMismatch(fronts: fronts.count, backs: 0)
             }
+        }
+    }
+
+    /// Fehlende Rückseiten anhängen (die Blätter ohne gescannte Rückseite legt der Benutzer erneut ein).
+    func scanMissingBacks() {
+        phase = .scanningBacks
+        let folder = workFolder.appendingPathComponent("hinten-\(UUID().uuidString.prefix(6))")
+        Task {
+            let more = (try? await scanner.scanFeeder(dpi: dpi, color: color, into: folder,
+                                                      pagesBefore: backs.count)) ?? []
+            backs += more
+            checkBackCount()
+        }
+    }
+
+    private func checkBackCount() {
+        if backs.count == fronts.count {
+            buildPreview()
+        } else {
+            phase = .countMismatch(fronts: fronts.count, backs: backs.count)
         }
     }
 
@@ -224,10 +299,208 @@ final class ScanSession {
         let rotateBacks = UserDefaults.standard.bool(forKey: SettingsKey.rotateBacks)
         let frontPages = fronts.map { ScannedPage(url: $0, kind: .front, rotation: 0) }
         let backPages = backs.map { ScannedPage(url: $0, kind: .back, rotation: rotateBacks ? 180 : 0) }
-        pages = PageOrder.interleave(fronts: frontPages, backsScannedReversed: backPages)
-        phase = .preview
         Summarizer.prewarm()
+        if backPages.isEmpty {  // nur Vorderseiten
+            showPreview(fronts: frontPages, backs: [])
+            return
+        }
+        guard backPages.count == frontPages.count else {
+            // Anzahl passt nicht: Blätter sind nicht eindeutig zuzuordnen → wie gescannt zusammenführen
+            pages = PageOrder.interleave(fronts: frontPages, backsScannedReversed: backPages)
+            phase = .preview
+            startAnalysis()
+            return
+        }
+        // Rückseiten, auf denen nur die Vorderseite durchscheint, gibt es auf dem Papier nicht
+        phase = .processing("Rückseiten werden geprüft …")
+        analysisTask = Task {
+            var backsInOrder: [ScannedPage?] = backPages.reversed()
+            for i in frontPages.indices {
+                if Task.isCancelled { return }
+                guard let back = backsInOrder[i] else { continue }
+                if await Self.isShowThrough(back: back.url, front: frontPages[i].url) { backsInOrder[i] = nil }
+            }
+            if Task.isCancelled { return }
+            removedShowThrough = backsInOrder.filter { $0 == nil }.count
+            if removedShowThrough > 0 {
+                Self.log.notice("Durchschein: \(self.removedShowThrough) Rückseite(n) entfernt")
+            }
+            showPreview(fronts: frontPages, backs: backsInOrder)
+        }
+    }
+
+    /// Seiten in Lesereihenfolge; `backs` gleich viele wie `fronts` (nil = keine Rückseite) oder leer.
+    private func showPreview(fronts frontPages: [ScannedPage], backs backsInOrder: [ScannedPage?]) {
+        pages = frontPages.indices.flatMap { i in
+            [frontPages[i]] + (i < backsInOrder.count ? [backsInOrder[i]].compactMap { $0 } : [])
+        }
+        if splitStack, frontPages.count >= 2 {
+            stackSheets = frontPages.indices.map {
+                StackSheet(id: $0, front: frontPages[$0].id, back: $0 < backsInOrder.count ? backsInOrder[$0]?.id : nil)
+            }
+            analyzeStack()
+        } else {
+            phase = .preview
+            startAnalysis()
+        }
+    }
+
+    nonisolated private static func isShowThrough(back: URL, front: URL) async -> Bool {
+        await Task.detached(priority: .userInitiated) { () -> Bool in
+            guard let backImage = ImageTools.load(back), let frontImage = ImageTools.load(front) else { return false }
+            return BlankPage.isShowThrough(backImage, front: frontImage)
+        }.value
+    }
+
+    // MARK: Stapel aufteilen
+
+    /// Erkennt alle Seiten und schlägt Trennstellen vor.
+    private func analyzeStack() {
+        let ids = pages.map(\.id)
+        phase = .analyzingStack(done: 0, total: ids.count)
+        analysisTask = Task {
+            for (i, id) in ids.enumerated() {
+                if Task.isCancelled { return }
+                phase = .analyzingStack(done: i, total: ids.count)
+                stackPages[id] = await stackPage(id)
+            }
+            if Task.isCancelled { return }
+            let sheets = stackSheets.map { sheet in
+                DocumentSplitter.Sheet(front: stackPages[sheet.front] ?? .init(lines: [], blank: false),
+                                       back: sheet.back.map { stackPages[$0] ?? .init(lines: [], blank: false) })
+            }
+            let analysis = DocumentSplitter.analyze(sheets)
+            for (i, gap) in analysis.gaps.enumerated() {
+                Self.log.notice("Aufteilen: vor Blatt \(i + 2) \(gap.split ? "trennen" : "zusammen", privacy: .public) [\(String(describing: gap.confidence), privacy: .public)] \(gap.reason, privacy: .public)")
+            }
+            stackAnalysis = analysis
+            splits = analysis.gaps.map(\.split)
+            phase = .splitReview
+        }
+    }
+
+    /// Text und Leer-Flag einer Seite; leere Seiten werden gar nicht erst erkannt (spart Zeit).
+    private func stackPage(_ id: UUID) async -> DocumentSplitter.Page {
+        guard let page = pages.first(where: { $0.id == id }),
+              let image = try? await Self.loadImage(url: page.url, rotation: page.rotation) else {
+            return .init(lines: [], blank: false)
+        }
+        if await Task.detached(operation: { BlankPage.isBlank(image) }).value {
+            ocrCache[id] = (page.rotation, [])
+            return .init(lines: [], blank: true)
+        }
+        let lines = await prepare(id) ?? []
+        return .init(lines: lines, blank: false)
+    }
+
+    /// Dokumente laut aktuellen Trennstellen (Blattindizes in Scanreihenfolge, ohne Trennblätter).
+    var stackDocuments: [[Int]] {
+        DocumentSplitter.documents(sheetCount: stackSheets.count, splits: splits,
+                                   separators: stackAnalysis?.separators ?? [])
+    }
+
+    /// Blattreihenfolge eines Dokuments laut Seitenzahlen, falls sie von der Scanreihenfolge abweicht.
+    func sheetOrder(_ document: [Int]) -> [Int]? {
+        let sheets = document.map { i in
+            DocumentSplitter.Sheet(front: stackPages[stackSheets[i].front] ?? .init(lines: [], blank: false),
+                                   back: stackSheets[i].back.map { stackPages[$0] ?? .init(lines: [], blank: false) })
+        }
+        return DocumentSplitter.sheetOrder(sheets).map { $0.map { document[$0] } }
+    }
+
+    /// Seite wurde beim Aufteilen als leer erkannt.
+    func isBlank(_ id: UUID) -> Bool { stackPages[id]?.blank ?? false }
+
+    func toggleSplit(beforeSheet index: Int) {
+        guard index > 0, index - 1 < splits.count else { return }
+        splits[index - 1].toggle()
+    }
+
+    /// Übernimmt die Trennstellen und beginnt mit dem ersten Dokument.
+    func confirmSplit() {
+        documentQueue = stackDocuments.map { document in
+            (sheetOrder(document) ?? document).flatMap { i in [stackSheets[i].front] + (stackSheets[i].back.map { [$0] } ?? []) }
+        }
+        documentCount = documentQueue.count
+        documentNumber = 0
+        prepareStackSuggestions()
+        loadNextDocument()
+    }
+
+    /// Erzeugt die Vorschläge aller Dokumente im Hintergrund, eines nach dem anderen – so sind sie
+    /// meist schon fertig, wenn das Dokument an der Reihe ist.
+    private func prepareStackSuggestions() {
+        guard Summarizer.isAvailable else { return }
+        let known = model.knownCategories
+        var previous: Task<Result<DocumentSuggestion, Error>, Never>?
+        for ids in documentQueue {
+            let text = suggestionText(ids)
+            guard DocumentIssue.hasText(text), stackSuggestions[text] == nil else { continue }
+            let before = previous
+            let task = Task { () -> Result<DocumentSuggestion, Error> in
+                _ = await before?.value  // das Modell nicht parallel belasten
+                if Task.isCancelled { return .failure(CancellationError()) }
+                do { return .success(try await Summarizer.suggest(for: text, knownCategories: known)) } catch { return .failure(error) }
+            }
+            stackSuggestions[text] = task
+            previous = task
+        }
+    }
+
+    /// Text der ersten Seiten wie in `startAnalysis` (aus der Texterkennung im Cache).
+    private func suggestionText(_ ids: [UUID]) -> String {
+        ids.prefix(Self.suggestionPageCount).compactMap { ocrCache[$0]?.lines }
+            .map { $0.map(\.text).joined(separator: "\n") }
+            .joined(separator: "\n\n")
+    }
+
+    /// Dieses und alle folgenden Dokumente mit ihren Vorschlägen speichern.
+    func saveAll() {
+        savingAll = true
+        save()
+    }
+
+    /// Den Stapel doch als ein einziges Dokument behandeln.
+    func skipSplit() {
+        stackSheets = []
+        stackAnalysis = nil
+        splits = []
+        phase = .preview
         startAnalysis()
+    }
+
+    /// Aktuelles Dokument nicht speichern und zum nächsten wechseln.
+    func skipDocument() {
+        analysisTask?.cancel()
+        backgroundOCRTask?.cancel()
+        if documentQueue.isEmpty { finishStack() } else { loadNextDocument() }
+    }
+
+    var hasMoreDocuments: Bool { !documentQueue.isEmpty }
+
+    private func loadNextDocument() {
+        guard !documentQueue.isEmpty else { finishStack(); return }
+        let ids = documentQueue.removeFirst()
+        let byID = Dictionary(uniqueKeysWithValues: (pages + stackRemainder).map { ($0.id, $0) })
+        // Seiten aller übrigen Dokumente bleiben erhalten (Bilder, Drehung, Texterkennung)
+        stackRemainder = (pages + stackRemainder).filter { page in documentQueue.contains { $0.contains(page.id) } }
+        pages = ids.compactMap { byID[$0] }
+        documentNumber += 1
+        resetDocumentState()
+        phase = .preview
+        startAnalysis()
+        if savingAll { save() }
+    }
+
+    /// Nach dem letzten Dokument: Übersicht zeigen oder neu beginnen.
+    private func finishStack() {
+        let saved = savedURLs
+        let issues = saved.count == 1 ? savedIssues : []  // bei mehreren stehen die Probleme im Archiv
+        reset()
+        guard let last = saved.last else { return }
+        savedURLs = saved
+        savedIssues = issues
+        phase = .saved(last)
     }
 
     // MARK: Zurücksetzen / Bearbeiten
@@ -241,8 +514,28 @@ final class ScanSession {
         backs = []
         pages = []
         ocrCache = [:]
-        suggestedText = nil
         singleError = nil
+        feederNote = nil
+        stackSheets = []
+        stackAnalysis = nil
+        splits = []
+        stackPages = [:]
+        stackRemainder = []
+        documentQueue = []
+        documentNumber = 0
+        documentCount = 0
+        savedURLs = []
+        removedShowThrough = 0
+        stackSuggestions.values.forEach { $0.cancel() }
+        stackSuggestions = [:]
+        savingAll = false
+        resetDocumentState()
+        phase = .ready
+    }
+
+    /// Setzt Vorschlag und Eingaben des aktuellen Dokuments zurück (Seiten und Texterkennung bleiben).
+    private func resetDocumentState() {
+        suggestedText = nil
         orderHint = nil
         orderHintDismissedFor = nil
         withoutEditTracking {
@@ -256,8 +549,8 @@ final class ScanSession {
         categoriesEdited = false
         categoriesDecided = false
         dateSource = .today
+        dateFromAI = false
         suggestionState = .idle
-        phase = .ready
     }
 
     /// Dreht eine Seite um `degrees` im Uhrzeigersinn (negativ = gegen den Uhrzeigersinn).
@@ -328,6 +621,7 @@ final class ScanSession {
 
     /// Verwirft eigene Eingaben und fragt Apple Intelligence erneut.
     func resuggest() {
+        stackSuggestions[suggestionText(pages.map(\.id))] = nil  // wirklich neu fragen
         suggestedText = nil
         titleEdited = false
         summaryEdited = false
@@ -353,8 +647,8 @@ final class ScanSession {
         let first = Array(ids.prefix(Self.suggestionPageCount))
         if case let .reorder(proposed, _) = orderHint, Set(proposed) != Set(ids) { orderHint = nil }
 
+        if suggestedText == nil || suggestionState != .done { suggestionState = .recognizing }
         analysisTask = Task {
-            if suggestedText == nil || suggestionState != .done { suggestionState = .recognizing }
             var texts: [String] = []
             for id in first {
                 if let lines = await prepare(id) { texts.append(lines.map(\.text).joined(separator: "\n")) }
@@ -385,7 +679,13 @@ final class ScanSession {
             }
             suggestionState = .suggesting
             do {
-                let suggestion = try await Summarizer.suggest(for: text, knownCategories: model.knownCategories)
+                let suggestion: DocumentSuggestion
+                if let prepared = stackSuggestions[text], case let .success(result) = await prepared.value {
+                    suggestion = result
+                } else {
+                    stackSuggestions[text] = nil
+                    suggestion = try await Summarizer.suggest(for: text, knownCategories: model.knownCategories)
+                }
                 if Task.isCancelled { return }
                 withoutEditTracking {
                     if !titleEdited { title = suggestion.title }
@@ -452,9 +752,24 @@ final class ScanSession {
 
     // MARK: Speichern
 
-    func save() {
+    func save() { save(waitForSuggestion: true) }
+
+    private func save(waitForSuggestion: Bool) {
         guard let archive = model.archive, let index = model.index else {
             phase = .failed(model.error ?? "Kein Archivordner.")
+            return
+        }
+        // Ohne eigenen Titel nicht speichern, solange der Vorschlag noch unterwegs ist (höchstens eine Minute warten)
+        if waitForSuggestion, title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+           suggestionState == .recognizing || suggestionState == .suggesting {
+            phase = .processing(documentCount > 1 ? "Dokument \(documentNumber) von \(documentCount): Titel wird vorgeschlagen …"
+                                                  : "Titel wird vorgeschlagen …")
+            Task {
+                for _ in 0..<300 where suggestionState == .recognizing || suggestionState == .suggesting {
+                    try? await Task.sleep(for: .milliseconds(200))
+                }
+                if case .processing = phase { save(waitForSuggestion: false) }
+            }
             return
         }
         analysisTask?.cancel()
@@ -503,6 +818,7 @@ final class ScanSession {
                 if orderHint == nil {
                     checkPageOrder()
                     if orderHint != nil {
+                        savingAll = false  // Benutzer entscheidet über die Reihenfolge
                         phase = .preview
                         return
                     }
@@ -561,10 +877,17 @@ final class ScanSession {
                 try index.add(number: saved.number, date: date, url: saved.url, pages: pdfPages.count,
                               text: texts.joined(separator: "\n\n"), title: title, summary: summary, meta: meta)
                 model.didSave()
-                reset()
+                savedURLs.append(saved.url)
                 savedIssues = issues
-                phase = .saved(saved.url)
+                if documentCount > 0 {
+                    loadNextDocument()  // nach dem letzten: Übersicht
+                } else {
+                    reset()
+                    savedIssues = issues
+                    phase = .saved(saved.url)
+                }
             } catch {
+                savingAll = false
                 phase = .failed(error.localizedDescription)
             }
         }

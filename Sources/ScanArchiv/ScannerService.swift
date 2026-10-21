@@ -53,6 +53,8 @@ final class ScannerService: NSObject {
     /// Wartet auf den Wechsel zwischen Einzug und Vorlagenglas
     @ObservationIgnored private var unitContinuation: CheckedContinuation<Void, Error>?
     @ObservationIgnored private var requestedUnit: ICScannerFunctionalUnitType?
+    /// Seiten aus früheren Teilen desselben Stapels (für die Fortschrittsanzeige)
+    @ObservationIgnored private var pageOffset = 0
 
     override init() {
         super.init()
@@ -77,8 +79,15 @@ final class ScannerService: NSObject {
     }
 
     /// Scannt alle Blätter im Einzug und liefert die Seitenbilder (PNG) in Scan-Reihenfolge.
-    func scanFeeder(dpi: Int, color: Bool, into folder: URL) async throws -> [URL] {
-        try await scan(source: .feeder, dpi: dpi, color: color, into: folder)
+    ///
+    /// Achtung: Manche Scanner (z. B. Brother MFC-L2710DN) legen mitten im Stapel eine Pause ein; der
+    /// Treiber meldet den Auftrag dann ohne Fehler als beendet, und die danach eingezogenen Blätter
+    /// kommen nie an. Ein erneuter Auftrag rettet sie nicht – sie müssen nachgescannt werden.
+    /// - Parameter pagesBefore: bereits vorhandene Seiten dieses Durchgangs (nur für die Anzeige)
+    func scanFeeder(dpi: Int, color: Bool, into folder: URL, pagesBefore: Int = 0) async throws -> [URL] {
+        pageOffset = pagesBefore
+        defer { pageOffset = 0 }
+        return try await scan(source: .feeder, dpi: dpi, color: color, into: folder)
     }
 
     /// Scannt über die gewählte Quelle: beim Einzug alle eingelegten Blätter, beim Vorlagenglas eine A4-Seite.
@@ -119,7 +128,7 @@ final class ScannerService: NSObject {
         scanner.documentUTI = UTType.png.identifier
 
         scannedURLs = []
-        pagesInCurrentScan = 0
+        pagesInCurrentScan = pageOffset
         statusText = "Scanne …"
         return try await withCheckedThrowingContinuation { cont in
             continuation = cont
@@ -152,6 +161,7 @@ final class ScannerService: NSObject {
         continuation = nil
         let urls = scannedURLs
         scannedURLs = []
+        Self.log.notice("Scan beendet: \(urls.count) Seite(n)\(error.map { ", Fehler \(($0 as NSError).domain) \(($0 as NSError).code)" } ?? "", privacy: .public)")
         if let error, urls.isEmpty {
             statusText = "Scan fehlgeschlagen"
             let flatbed = selected?.selectedFunctionalUnit.type == .flatbed
@@ -242,7 +252,7 @@ extension ScannerService: ICScannerDeviceDelegate {
     nonisolated func scannerDevice(_ scanner: ICScannerDevice, didScanTo url: URL) {
         MainActor.assumeIsolated {
             scannedURLs.append(url)
-            pagesInCurrentScan = scannedURLs.count
+            pagesInCurrentScan = pageOffset + scannedURLs.count
             statusText = "Seite \(scannedURLs.count) gescannt …"
         }
     }

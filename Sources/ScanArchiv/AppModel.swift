@@ -14,6 +14,8 @@ enum SettingsKey {
     static let defaultPageThumbHeight = 560.0
     static let pageThumbHeightRange = 200.0...1200.0
     static let singleSource = "singleSource"
+    /// Stapel in mehrere Dokumente aufteilen
+    static let splitStack = "splitStack"
     static let inboxPath = "inboxPath"
     // Kompression (Werte: rawValue von SizePreset / ColorMode)
     static let scanPreset = "scanPreset"
