@@ -18,7 +18,7 @@ struct MenuBarContent: View {
         }
         .keyboardShortcut(",")
         Divider()
-        Button("ScanArchiv beenden") { NSApp.terminate(nil) }
+        Button("\(ScanArchivApp.displayName) beenden") { NSApp.terminate(nil) }
             .keyboardShortcut("q")
     }
 

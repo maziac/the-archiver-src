@@ -73,7 +73,7 @@ struct ScanArchivApp: App {
                 .environment(model)
                 .environment(inbox)
         }
-        MenuBarExtra("ScanArchiv", systemImage: "archivebox", isInserted: $showInMenuBar) {
+        MenuBarExtra(Self.displayName, systemImage: "archivebox", isInserted: $showInMenuBar) {
             MenuBarContent()
                 .environment(model)
                 .environment(inbox)
