@@ -1,4 +1,4 @@
-# ScanArchiv
+# Archiver
 
 Mac-App für beidseitige Dokumente mit einem Scanner, der über den Einzug nur einseitig scannt
 (entwickelt für den Brother MFC-L2710DN im Netzwerk).
@@ -19,7 +19,7 @@ Benötigt macOS 14+ und Xcode (bzw. die Command Line Tools).
 
 ```bash
 ./build.sh
-open build/ScanArchiv.app
+open build/Archiver.app
 ```
 
 Tests: `swift test`
@@ -61,7 +61,7 @@ Vorhandene PDFs und Bilder werden vollautomatisch archiviert, ohne Vorschau:
 - **Mehrere Bilder:** Legst du mehrere Bilder gleichzeitig ab, fragt ein Dialog, ob sie **zu einem Dokument
   verbunden** werden (eine Seite je Bild, Reihenfolge nach Dateiname) oder **je Bild ein eigenes Dokument**
   ergeben. Beim Verbinden werden die Bilder nicht neu kodiert; Texterkennung, Titel, Datum und Nummer
-  vergibt ScanArchiv danach wie gewohnt.
+  vergibt Archiver danach wie gewohnt.
 - **Ordner:** Beim Ablegen eines Ordners fragt ein Dialog, ob **Unterordner** einbezogen werden sollen und welche
   **Dateitypen** (PDFs, Bilder) übernommen werden. Er zeigt vorab, wie viele Dateien gefunden wurden; die Auswahl
   wird gemerkt. Das Kopieren läuft im Hintergrund, der Fortschritt steht in der Kopfzeile des Eingangs.
@@ -126,7 +126,7 @@ der Tag trifft. „+“ legt einen Tag an, Rechtsklick → „Bearbeiten …“ 
 - Tags stehen **nicht** im Dokument und werden in Liste und Vorschau **nicht markiert** – sie filtern nur.
   Markiert werden nur Wörter aus dem Suchfeld.
 - Der Editor prüft den Ausdruck sofort und zeigt die Trefferzahl.
-- Gespeichert werden die Tags im Archivordner in `.scanarchiv-tags.json`; sie wandern also mit dem Archiv.
+- Gespeichert werden die Tags im Archivordner in `.archiver-tags.json`; sie wandern also mit dem Archiv.
 
 ## Dokumentdatum
 
@@ -195,7 +195,7 @@ noch für Rückseiten ohne erkennbaren Text nötig.
 
 ## Seitenreihenfolge
 
-Stehen auf den Seiten gedruckte Seitenzahlen, prüft ScanArchiv, ob die Reihenfolge stimmt. Erkannt
+Stehen auf den Seiten gedruckte Seitenzahlen, prüft Archiver, ob die Reihenfolge stimmt. Erkannt
 werden nur eindeutige Angaben in Kopf- oder Fußzeile: „Seite 2 von 4“, „Seite 2/4“, „Seite 2“, „S. 2“,
 „Blatt 2“, „Page 2 of 4“, „2/4“ und „- 2 -“. Nackte Zahlen zählen nicht, damit Beträge oder
 Positionsnummern keinen Fehlalarm auslösen.
@@ -228,14 +228,14 @@ Farbmodus: *Farbe/Original*, *Graustufen* oder *Schwarz-Weiß (1 Bit)*.
 
 ### Importierte PDFs bleiben unverändert (inkrementelles Speichern)
 
-ScanArchiv schreibt importierte PDFs nicht neu, sondern **hängt** Stempel, OCR-Textebene (nur für Bildseiten)
+Archiver schreibt importierte PDFs nicht neu, sondern **hängt** Stempel, OCR-Textebene (nur für Bildseiten)
 und Metadaten per inkrementellem Update an das unveränderte Original an – ein Standardverfahren von PDF.
 So bleiben Bilder (z. B. CCITT-Fax-Scans), Schriften und Objekt-Streams bitgenau erhalten; der Aufschlag
 liegt typisch bei 2–6 KB. Beispiel: ein 6-seitiges Versicherungs-PDF mit CCITT-Scans wuchs früher beim
 Neuschreiben durch PDFKit um 533 KB, jetzt um etwa 3 KB.
 
 - Der Stempel nutzt die PDF-Standardschrift Helvetica-Bold (ohne Einbettung), die OCR-Ebene eine von
-  ScanArchiv erzeugte **Schrift ohne Zeichenformen** mit nur den benutzten Zeichen, wie bei OCRmyPDF.
+  Archiver erzeugte **Schrift ohne Zeichenformen** mit nur den benutzten Zeichen, wie bei OCRmyPDF.
 - Beim Import entstehen mehrere Fassungen: angehängt, durch PDFKit neu geschrieben und – bei aktiver
   Kompression – mit neu erzeugten Bildseiten. Jede wird geprüft (Text aller Seiten, Stempel, Metadaten);
   die **kleinste gültige** wird gespeichert. Welche es ist, steht in der Info unter „Speicherung“.
@@ -249,7 +249,7 @@ und stellt alles vollständig wieder her.
 
 - **Standardfelder** (auch für Spotlight und Vorschau.app): Titel, Beschreibung (Betreff), Nummer
   (Stichwörter), Programm, Archivierungszeitpunkt (Erstelldatum).
-- **ScanArchiv-Daten** als JSON in einer unsichtbaren, nicht druckbaren Anmerkung auf Seite 1:
+- **Archiver-Daten** als JSON in einer unsichtbaren, nicht druckbaren Anmerkung auf Seite 1:
   - Dokumentdatum und Herkunft (Text, Apple Intelligence, Tagesdatum, von Hand),
   - Herkunft von Titel/Beschreibung (Apple Intelligence oder von Hand) mit Zeitpunkt,
   - Quelle (Scan/PDF/Bild), Originaldateiname, -größe und Prüfsumme,
@@ -258,12 +258,12 @@ und stellt alles vollständig wieder her.
   - je Seite die Herkunft des Textes: *vorhandener Text* (schon im Original, keine OCR nötig), *per OCR erkannt*,
     *ohne Text* (OCR fand nichts) oder bei Altbestand *Herkunft unbekannt*; dazu OCR-Engine, Sprachen und Zeitpunkt,
   - Problem-Vermerke.
-  - Programmversion bei der Erstellung und bei der letzten Änderung, z. B. „ScanArchiv 1.1 (Build 202609191013)“.
+  - Programmversion bei der Erstellung und bei der letzten Änderung, z. B. „Archiver 1.1 (Build 202609191013)“.
     Daran lässt sich später erkennen, welche Dokumente mit welcher OCR- bzw. Kompressionslogik entstanden sind.
 - Im Archiv zeigen der **ⓘ-Button** über der Vorschau und der **Tooltip über der Spalte „Datei“** diese Angaben an.
 - Dokumente aus älteren Versionen bekommen die Daten beim nächsten Einlesen einmalig ergänzt; die
-  frühere Zusatzdatei `.scanarchiv-issues.json` wird dabei übernommen und entfernt. Als Erstellversion steht dort
-  „ScanArchiv vor 1.0“.
+  frühere Zusatzdatei `.archiver-issues.json` wird dabei übernommen und entfernt. Als Erstellversion steht dort
+  „Archiver vor 1.0“.
 
 Die aktuelle Programmversion steht in den Einstellungen unter „Über“. `build.sh` vergibt bei jedem Build eine
 eindeutige Build-Nummer (Zeitstempel).
@@ -278,8 +278,8 @@ Archivordner, Eingangsordner, Scan-Auflösung und -Farbe, Rückseiten drehen, Ko
 | --- | --- |
 | `JJJJ-MM-TT_NNNNNN_Titel.pdf` | die Dokumente (Titel und Beschreibung auch in den PDF-Metadaten) |
 | `counter.json` | letzte vergebene Nummer |
-| `.scanarchiv-tags.json` | Tags (gespeicherte Suchen) |
-| `.scanarchiv-index.sqlite` | Suchindex (SQLite FTS5), jederzeit per „Index neu aufbauen“ wiederherstellbar |
+| `.archiver-tags.json` | Tags (gespeicherte Suchen) |
+| `.archiver-index.sqlite` | Suchindex (SQLite FTS5), jederzeit per „Index neu aufbauen“ wiederherstellbar |
 
 Die nächste Nummer ist immer größer als der Zählerstand **und** größer als jede Nummer, die schon in
 einem Dateinamen vorkommt. So entstehen keine Doppelten, selbst wenn `counter.json` verloren geht.
@@ -287,8 +287,8 @@ Andere PDFs, die du in den Ordner legst, werden ebenfalls indexiert.
 
 ## Aufbau
 
-- `Sources/ScanArchivCore/`: scannerunabhängige Logik (Seitenreihenfolge, OCR, PDF, Archiv, Suchindex,
+- `Sources/ArchiverCore/`: scannerunabhängige Logik (Seitenreihenfolge, OCR, PDF, Archiv, Suchindex,
   Datumserkennung `DateExtractor`, Vorschläge `Summarizer`), mit Tests
-- `Sources/ScanArchiv/`: SwiftUI-App und Scannersteuerung (`ScannerService`), Ablauf (`ScanSession`)
+- `Sources/Archiver/`: SwiftUI-App und Scannersteuerung (`ScannerService`), Ablauf (`ScanSession`)
 
-Scanner-Diagnose: `log stream --predicate 'subsystem == "de.local.scanarchiv"'`
+Scanner-Diagnose: `log stream --predicate 'subsystem == "de.local.archiver"'`

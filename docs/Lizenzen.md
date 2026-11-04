@@ -1,4 +1,4 @@
-**ScanArchiv verwendet keine externen Bibliotheken.** Es gibt keine Paketabhängigkeiten: `Package.swift` listet nur die eigenen Targets, und eine `Package.resolved` existiert nicht. Nichts wird beim Bauen heruntergeladen.
+**Archiver verwendet keine externen Bibliotheken.** Es gibt keine Paketabhängigkeiten: `Package.swift` listet nur die eigenen Targets, und eine `Package.resolved` existiert nicht. Nichts wird beim Bauen heruntergeladen.
 
 **Verwendet werden ausschließlich Apple-Systemframeworks**, die zu macOS bzw. Xcode gehören. Sie werden nicht mitgeliefert, sondern zur Laufzeit vom System bereitgestellt. Es gilt die **Apple-Software-Lizenz (macOS SLA) bzw. das Xcode-SDK-Agreement**; eine Weitergabepflicht für Lizenztexte entsteht dadurch nicht.
 

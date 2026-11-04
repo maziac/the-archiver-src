@@ -2,7 +2,7 @@
     "version": "2.0.0",
     "tasks": [
         {
-            "label": "Build: ScanArchiv.app (Release)",
+            "label": "Build: Archiver.app (Release)",
             "type": "shell",
             "command": "./build.sh",
             "group": { "kind": "build", "isDefault": true },
@@ -17,18 +17,18 @@
         },
         {
             // Quits a running instance first, then opens the freshly built app.
-            "label": "Run: ScanArchiv.app",
+            "label": "Run: Archiver.app",
             "type": "shell",
-            "command": "pkill -x ScanArchiv; open build/ScanArchiv.app",
-            "dependsOn": "Build: ScanArchiv.app (Release)",
+            "command": "pkill -x Archiver; open build/Archiver.app",
+            "dependsOn": "Build: Archiver.app (Release)",
             "problemMatcher": []
         },
         {
             // Runs the binary directly so its output appears in this terminal (stop the task to quit).
-            "label": "Run: ScanArchiv.app (in terminal)",
+            "label": "Run: Archiver.app (in terminal)",
             "type": "shell",
-            "command": "pkill -x ScanArchiv; build/ScanArchiv.app/Contents/MacOS/ScanArchiv",
-            "dependsOn": "Build: ScanArchiv.app (Release)",
+            "command": "pkill -x Archiver; build/Archiver.app/Contents/MacOS/Archiver",
+            "dependsOn": "Build: Archiver.app (Release)",
             "isBackground": true,
             "problemMatcher": []
         },
@@ -43,7 +43,7 @@
         {
             "label": "App Store: Run sandbox build",
             "type": "shell",
-            "command": "pkill -x ScanArchiv; open -n 'build/AppStore/The Archiver.app'",
+            "command": "pkill -x Archiver; open -n 'build/AppStore/The Archiver.app'",
             "dependsOn": "App Store: Build (ad hoc, sandbox)",
             "problemMatcher": []
         },

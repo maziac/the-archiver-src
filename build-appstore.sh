@@ -11,7 +11,7 @@ ARCHS=${ARCHS:-"arm64 x86_64"}
 ARCH_FLAGS=()
 for a in $ARCHS; do ARCH_FLAGS+=(--arch "$a"); done
 swift build -c release "${ARCH_FLAGS[@]}"
-BIN=$(swift build -c release "${ARCH_FLAGS[@]}" --show-bin-path)/ScanArchiv
+BIN=$(swift build -c release "${ARCH_FLAGS[@]}" --show-bin-path)/Archiver
 
 OUT=build/AppStore
 APP="$OUT/The Archiver.app"
@@ -24,7 +24,7 @@ cp Resources/AppIcon.icns Resources/PrivacyInfo.xcprivacy "$APP/Contents/Resourc
 /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $(date +%Y%m%d%H%M)" "$APP/Contents/Info.plist"
 
 if [ -z "${SIGN_IDENTITY:-}" ]; then
-    codesign --force --sign - --entitlements Resources/ScanArchiv.entitlements "$APP"
+    codesign --force --sign - --entitlements Resources/Archiver.entitlements "$APP"
     echo "Fertig (ad hoc, Sandbox): $APP"
     exit 0
 fi
@@ -34,7 +34,7 @@ fi
 cp "$PROFILE" "$APP/Contents/embedded.provisionprofile"
 # Team- und App-ID aus dem Profil in die Entitlements übernehmen
 ENT=$OUT/entitlements.plist
-cp Resources/ScanArchiv.entitlements "$ENT"
+cp Resources/Archiver.entitlements "$ENT"
 security cms -D -i "$PROFILE" > "$OUT/profile.plist"
 APP_ID=$(/usr/libexec/PlistBuddy -c "Print :Entitlements:com.apple.application-identifier" "$OUT/profile.plist")
 TEAM=$(/usr/libexec/PlistBuddy -c "Print :Entitlements:com.apple.developer.team-identifier" "$OUT/profile.plist")

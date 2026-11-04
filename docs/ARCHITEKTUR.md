@@ -1,4 +1,4 @@
-# ScanArchiv – Architektur
+# Archiver – Architektur
 
 Dieses Dokument beschreibt den Aufbau des Programms: die Module, wie sie zusammenhängen und wie die
 wichtigsten Abläufe funktionieren. Die Diagramme sind in [Mermaid](https://mermaid.js.org) geschrieben
@@ -9,11 +9,11 @@ lesbar ist.
 ## Grundprinzipien
 
 - **Das PDF ist der Master.** Nummer, Datum, Titel, Beschreibung, Herkunft, Probleme und Seiten-Infos
-  stehen *im* PDF (versteckte Anmerkung `/ScanArchiv` auf Seite 1 plus Dokumentinfos). Der Suchindex
+  stehen *im* PDF (versteckte Anmerkung `/Archiver` auf Seite 1 plus Dokumentinfos). Der Suchindex
   ist nur ein Cache und lässt sich jederzeit aus den PDFs neu aufbauen.
 - **Originale bleiben, wo möglich, bitgenau erhalten.** Bei importierten PDFs werden Stempel, OCR-Text,
   Metadaten, Umsortierungen und Drehungen per **inkrementellem Update** angehängt (`PDFAppender`).
-- **Zwei Schichten:** `ScanArchivCore` (Bibliothek, ohne UI, vollständig getestet) und `ScanArchiv`
+- **Zwei Schichten:** `ArchiverCore` (Bibliothek, ohne UI, vollständig getestet) und `Archiver`
   (SwiftUI-App: Oberfläche, Scanner, Eingangsordner).
 - **Nummern werden nie wiederverwendet:** maßgeblich ist das Maximum aus `counter.json` und der höchsten
   Nummer im Archivordner.
@@ -25,14 +25,14 @@ lesbar ist.
 ```mermaid
 %%{init: {"theme": "base", "themeVariables": {"lineColor": "#7f9cd6", "primaryColor": "#eef2fa", "primaryTextColor": "#1d2433", "primaryBorderColor": "#7f9cd6", "secondaryColor": "#f3f0fa", "tertiaryColor": "#f6f8fc", "clusterBkg": "#f6f8fc", "clusterBorder": "#7f9cd6", "titleColor": "#1d2433", "edgeLabelBackground": "#ffffff", "textColor": "#1d2433", "signalColor": "#7f9cd6", "signalTextColor": "#7f9cd6", "actorBkg": "#eef2fa", "actorBorder": "#7f9cd6", "actorTextColor": "#1d2433", "actorLineColor": "#7f9cd6", "labelBoxBkgColor": "#eef2fa", "labelTextColor": "#1d2433", "loopTextColor": "#7f9cd6", "noteBkgColor": "#fff7d6", "noteTextColor": "#1d2433"}, "themeCSS": ".flowchart-link, .messageLine0, .messageLine1, .actor-line { stroke-width: 2px !important; }"}}%%
 flowchart TB
-    subgraph APP["ScanArchiv – App (SwiftUI)"]
+    subgraph APP["Archiver – App (SwiftUI)"]
         direction TB
         Views["Views<br/>ScanView · InboxView · SearchView<br/>PDFPreviewPane · PageEditorSheet · SettingsView …"]
         Controller["Steuerung<br/>AppModel · ScanSession<br/>InboxService · ScannerService"]
         Views --> Controller
     end
 
-    subgraph CORE["ScanArchivCore – Bibliothek"]
+    subgraph CORE["ArchiverCore – Bibliothek"]
         direction TB
         Pipeline["Verarbeitung<br/>ImportProcessor · OCRService · Summarizer<br/>DateExtractor · FileDate · PageNumbering · BlankPage"]
         PDF["PDF-Erzeugung & -Änderung<br/>PDFBuilder · PDFStamper · PDFAppender<br/>PDFRaw · GlyphlessFont · PageCompressor"]
@@ -51,7 +51,7 @@ flowchart TB
     end
 
     subgraph FILES["Dateisystem"]
-        ArchiveDir[("Archivordner<br/>JJJJ-MM-TT_NNNNNN_Titel.pdf<br/>counter.json<br/>.scanarchiv-index.sqlite<br/>.scanarchiv-tags.json")]
+        ArchiveDir[("Archivordner<br/>JJJJ-MM-TT_NNNNNN_Titel.pdf<br/>counter.json<br/>.archiver-index.sqlite<br/>.archiver-tags.json")]
         InboxDir[("Eingangsordner<br/>+ Fehler/ + Duplikate/")]
     end
 
@@ -74,7 +74,7 @@ flowchart TB
 ```mermaid
 %%{init: {"theme": "base", "themeVariables": {"lineColor": "#7f9cd6", "primaryColor": "#eef2fa", "primaryTextColor": "#1d2433", "primaryBorderColor": "#7f9cd6", "secondaryColor": "#f3f0fa", "tertiaryColor": "#f6f8fc", "clusterBkg": "#f6f8fc", "clusterBorder": "#7f9cd6", "titleColor": "#1d2433", "edgeLabelBackground": "#ffffff", "textColor": "#1d2433", "signalColor": "#7f9cd6", "signalTextColor": "#7f9cd6", "actorBkg": "#eef2fa", "actorBorder": "#7f9cd6", "actorTextColor": "#1d2433", "actorLineColor": "#7f9cd6", "labelBoxBkgColor": "#eef2fa", "labelTextColor": "#1d2433", "loopTextColor": "#7f9cd6", "noteBkgColor": "#fff7d6", "noteTextColor": "#1d2433"}, "themeCSS": ".flowchart-link, .messageLine0, .messageLine1, .actor-line { stroke-width: 2px !important; }"}}%%
 flowchart LR
-    App["ScanArchivApp<br/>Tabs: Scannen · Eingang · Archiv"]
+    App["ArchiverApp<br/>Tabs: Scannen · Eingang · Archiv"]
 
     subgraph Views
         ScanView
@@ -194,12 +194,12 @@ flowchart LR
     subgraph PDFDatei["Archiv-PDF (Master)"]
         Inhalt["Seiteninhalt<br/>+ unsichtbare OCR-Textebene"]
         Stempel["roter Stempel<br/>Nr. 000123 · TT.MM.JJJJ"]
-        Anm["versteckte Anmerkung /ScanArchiv<br/>JSON: DocumentMetadata"]
+        Anm["versteckte Anmerkung /Archiver<br/>JSON: DocumentMetadata"]
         Info["Dokumentinfos<br/>Titel · Betreff · Stichwörter"]
     end
 
-    Index[(".scanarchiv-index.sqlite<br/>FTS5: Nummer, Datum, Pfad, Titel,<br/>Beschreibung, Text, Probleme, Metadaten")]
-    Tags[(".scanarchiv-tags.json<br/>gespeicherte Suchen")]
+    Index[(".archiver-index.sqlite<br/>FTS5: Nummer, Datum, Pfad, Titel,<br/>Beschreibung, Text, Probleme, Metadaten")]
+    Tags[(".archiver-tags.json<br/>gespeicherte Suchen")]
     Counter[("counter.json<br/>letzte Nummer")]
 
     Anm -- "sync / Neuaufbau" --> Index

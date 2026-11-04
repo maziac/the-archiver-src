@@ -1,4 +1,4 @@
-# Prompt: ScanArchiv von Grund auf neu implementieren
+# Prompt: Archiver von Grund auf neu implementieren
 
 > Diesen Text vollständig als Auftrag an einen Coding-Assistenten geben. Er beschreibt Ziel, Funktionen,
 > Datenformate, Architektur, bekannte Fallstricke und Abnahmekriterien. Ergänzend kann
@@ -8,7 +8,7 @@
 
 ## Auftrag
 
-Entwickle **ScanArchiv**, eine native macOS-App (Swift 6-Toolchain, Sprachmodus Swift 5, SwiftUI, macOS 14+),
+Entwickle **Archiver**, eine native macOS-App (Swift 6-Toolchain, Sprachmodus Swift 5, SwiftUI, macOS 14+),
 die Papierdokumente mit einem Netzwerk-Scanner digitalisiert, vorhandene PDFs und Bilder importiert und
 alles in einem durchsuchbaren, fortlaufend nummerierten PDF-Archiv ablegt. Die Oberfläche und alle Texte
 sind **deutsch**. Der Benutzer ist technisch versiert, möchte aber eine App, die ohne Nachdenken
@@ -22,15 +22,15 @@ grün. Frage nach, wenn eine Anforderung unklar ist, statt zu raten.
 ## 1. Projektaufbau
 
 - **SwiftPM-Paket** mit drei Targets:
-  - `ScanArchivCore` – Bibliothek ohne UI (die gesamte Logik), verlinkt `sqlite3`, **FoundationModels
+  - `ArchiverCore` – Bibliothek ohne UI (die gesamte Logik), verlinkt `sqlite3`, **FoundationModels
     schwach gelinkt** (`-Xlinker -weak_framework -Xlinker FoundationModels`), damit die App auch ohne
     Apple Intelligence startet.
-  - `ScanArchiv` – ausführbares SwiftUI-Target (Oberfläche, Scanner, Eingangsordner).
-  - `ScanArchivCoreTests` – Tests mit **swift-testing** (`import Testing`).
-- `build.sh`: `swift build -c release`, App-Bundle `build/ScanArchiv.app` zusammensetzen (Info.plist aus
+  - `Archiver` – ausführbares SwiftUI-Target (Oberfläche, Scanner, Eingangsordner).
+  - `ArchiverCoreTests` – Tests mit **swift-testing** (`import Testing`).
+- `build.sh`: `swift build -c release`, App-Bundle `build/Archiver.app` zusammensetzen (Info.plist aus
   `Resources/`, Icon), `CFBundleVersion` = Zeitstempel `yyyyMMddHHmm`, ad-hoc signieren.
 - Info.plist braucht u. a. die Scanner-/Netzwerk-Nutzungsbeschreibungen (ImageCaptureCore, Bonjour).
-- Die App-Version (`ScanArchiv 1.1 (Build …)`) wird beim Start aus dem Bundle gelesen und in jedes
+- Die App-Version (`Archiver 1.1 (Build …)`) wird beim Start aus dem Bundle gelesen und in jedes
   Dokument geschrieben.
 - Für End-to-End-Tests akzeptiert die App die Startargumente `-archivePath <Pfad>` und
   `-inboxPath <Pfad>` (überschreiben die Einstellungen).
@@ -60,8 +60,8 @@ grün. Frage nach, wenn eine Anforderung unklar ist, statt zu raten.
 - Dateiname: `JJJJ-MM-TT_NNNNNN_Titel.pdf` (Dokumentdatum, 6-stellige Nummer, Titel als „Slug“:
   Umlaute erhalten, unzulässige Zeichen entfernt, Länge begrenzt; ohne Titel `JJJJ-MM-TT_NNNNNN.pdf`).
 - `counter.json` – letzte vergebene Nummer.
-- `.scanarchiv-index.sqlite` – Suchindex (Cache).
-- `.scanarchiv-tags.json` – gespeicherte Suchen (Tags), gehören zum Archiv.
+- `.archiver-index.sqlite` – Suchindex (Cache).
+- `.archiver-tags.json` – gespeicherte Suchen (Tags), gehören zum Archiv.
 
 ### 3.2 Eingangsordner (Standard `~/Documents/Archiver-Inbox`)
 - Unterordner `Fehler/` (nicht verarbeitbar) und `Duplikate/` (gleiche SHA-256 wie ein archiviertes
@@ -77,7 +77,7 @@ grün. Frage nach, wenn eine Anforderung unklar ist, statt zu raten.
 - **Dokumentinfos:** Titel (oder Dateiname ohne Endung), Betreff = Beschreibung, Stichwörter
   `000123, Nr. 000123`, Creator = App-Version, Erstelldatum = Archivierungszeit.
 - **Metadaten** als JSON in einer **versteckten Anmerkung** auf Seite 1 (Subtype Text, Rect 0 0 0 0,
-  Flags hidden + readonly, eigener Schlüssel `/ScanArchiv`). Grund: PDFKit verwirft eigene Info-Schlüssel
+  Flags hidden + readonly, eigener Schlüssel `/Archiver`). Grund: PDFKit verwirft eigene Info-Schlüssel
   beim Speichern. JSON **ASCII-only** (`\uXXXX`-Escapes), Datumswerte im Codable-Standardformat
   (`.deferredToDate`), damit sie verlustfrei hin und zurück kommen.
 

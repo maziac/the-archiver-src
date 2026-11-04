@@ -2,7 +2,7 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-ScanArchiv ist eine deutschsprachige macOS-App (SwiftUI, macOS 14+) zum Scannen, Importieren und
+Archiver ist eine deutschsprachige macOS-App (SwiftUI, macOS 14+) zum Scannen, Importieren und
 Archivieren von Dokumenten. **Oberfläche, Kommentare, Commit-Nachrichten und Antworten an den Benutzer
 sind deutsch.**
 
@@ -12,13 +12,13 @@ sind deutsch.**
 swift build                      # schnell prüfen
 swift test                       # alle Tests (swift-testing)
 swift test --filter TagTests     # ein Suite/Test (Name des Typs, @Test-Namen oder @Suite-Titel)
-./build.sh                       # Release bauen → build/ScanArchiv.app (setzt CFBundleVersion = Zeitstempel)
-open build/ScanArchiv.app        # starten (vorher: pkill -x ScanArchiv)
+./build.sh                       # Release bauen → build/Archiver.app (setzt CFBundleVersion = Zeitstempel)
+open build/Archiver.app        # starten (vorher: pkill -x Archiver)
 swift scripts/make_icon.swift    # App-Icon neu erzeugen
 ```
 
 App mit eigenen Ordnern starten (für Tests von Hand):
-`build/ScanArchiv.app/Contents/MacOS/ScanArchiv -archivePath /tmp/a -inboxPath /tmp/e`
+`build/Archiver.app/Contents/MacOS/Archiver -archivePath /tmp/a -inboxPath /tmp/e`
 
 Nach Code-Änderungen: `swift test`, dann `./build.sh` und die App neu starten — der Benutzer prüft die
 Oberfläche selbst (Claude hat keinen Bildschirmzugriff). Apple Intelligence und Scanner sind in Tests
@@ -27,15 +27,15 @@ Rechnungsdatum) und ist kein Regressionssignal.
 
 ## Architektur
 
-Drei Targets (`Package.swift`): `ScanArchivCore` (gesamte Logik, testbar, ohne UI; linkt `sqlite3`, hat
-FoundationModels **weak-linked**), `ScanArchiv` (SwiftUI-App, Scanner, Eingangsordner),
-`ScanArchivCoreTests`. Ausführliche Diagramme: `docs/ARCHITEKTUR.md`. Eine vollständige Spezifikation
+Drei Targets (`Package.swift`): `ArchiverCore` (gesamte Logik, testbar, ohne UI; linkt `sqlite3`, hat
+FoundationModels **weak-linked**), `Archiver` (SwiftUI-App, Scanner, Eingangsordner),
+`ArchiverCoreTests`. Ausführliche Diagramme: `docs/ARCHITEKTUR.md`. Eine vollständige Spezifikation
 (für eine Neuimplementierung) steht in `docs/NEUIMPLEMENTIERUNG-PROMPT.md`.
 
 ### Unverhandelbare Prinzipien
 
 - **Das PDF ist der Master.** Alle Angaben (`DocumentMetadata`) stehen als ASCII-JSON in einer versteckten
-  Anmerkung `/ScanArchiv` auf Seite 1. PDFKit verwirft eigene Info-Schlüssel — deshalb die Anmerkung.
+  Anmerkung `/Archiver` auf Seite 1. PDFKit verwirft eigene Info-Schlüssel — deshalb die Anmerkung.
   Der SQLite-Index ist ein Cache und muss sich per `SearchIndex.sync(full: true)` vollständig aus den
   PDFs neu aufbauen lassen. Jede neue Metadaten-Information muss also im PDF landen.
 - **Importierte PDFs bleiben bitgenau.** Ergänzungen (Stempel, OCR-Ebene, Metadaten, Umsortierung,
@@ -46,7 +46,7 @@ FoundationModels **weak-linked**), `ScanArchiv` (SwiftUI-App, Scanner, Eingangso
 - **Nummern werden nie wiederverwendet:** `max(counter.json, höchste Nummer im Ordner) + 1`.
 - Schreiben immer atomar (temporäre Datei + `replaceItemAt`), Ergebnis vorher prüfen.
 
-### Core-Module (Sources/ScanArchivCore)
+### Core-Module (Sources/ArchiverCore)
 
 - `Archive` – Nummern, Dateinamen (`JJJJ-MM-TT_NNNNNN_Titel.pdf`), `save`, `updateMetadata`,
   `rearrange` (Seiten umsortieren/drehen), Migration von Altbestand. Threadsicher per Lock.
@@ -65,18 +65,18 @@ FoundationModels **weak-linked**), `ScanArchiv` (SwiftUI-App, Scanner, Eingangso
   Index-Spalte `categories` enthält alle Oberkategorien (`\nA\nA/B\n`).
 - `DocumentSplitter` – Stapel mit mehreren Briefen aufteilen: Entscheidung je Blattgrenze (Seitenzahlen,
   Merkmale einer ersten Seite, Grußformel, Kopf-/Fußzeile; beidseitig leeres Blatt = Trennblatt) und
-  blattweise Sortierung. Messung am echten Archiv: `SCANARCHIV_EVAL=<Archiv> swift test --filter DocumentSplitterEval`.
+  blattweise Sortierung. Messung am echten Archiv: `ARCHIVER_EVAL=<Archiv> swift test --filter DocumentSplitterEval`.
 - Kleinteile: `OCRService`, `Summarizer`, `DateExtractor`, `FileDate`, `PageNumbering`, `BlankPage`,
   `PageOrder`, `ImagesToPDF`, `FolderScan`, `TagQuery`/`TagStore`, `DocumentMetadata`/`PDFMetadata`,
   `DocumentIssue`, `DocumentInfo`.
 
-### App-Schicht (Sources/ScanArchiv)
+### App-Schicht (Sources/Archiver)
 
 `AppModel` (@Observable, MainActor) hält Archiv, Index, Tags, Einstellungen (`SettingsKey`) und die
 Dokument-Aktionen; ein `revision`-Zähler löst das Neuladen der Listen aus. `ScanSession` ist der
 Zustandsautomat des Scans (Stapel zweiteilig oder Seite für Seite, Vorschau, OCR-Cache, Vorschläge).
 `ScannerService` kapselt ImageCaptureCore, `InboxService` die Ordnerüberwachung und Warteschlange.
-Views liegen in `Sources/ScanArchiv/Views`.
+Views liegen in `Sources/Archiver/Views`.
 
 Einmalige Reparaturen/Nachprüfungen laufen in `AppModel.reindex` über versionierte
 UserDefaults-Schlüssel (`legacyRepairV1`, `blankPagesV2:<Archivpfad>`); bei geänderter Heuristik den
