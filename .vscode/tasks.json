@@ -1,0 +1,66 @@
+{
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "label": "Build: ScanArchiv.app (Release)",
+            "type": "shell",
+            "command": "./build.sh",
+            "group": { "kind": "build", "isDefault": true },
+            "problemMatcher": {
+                "owner": "swift",
+                "fileLocation": "absolute",
+                "pattern": {
+                    "regexp": "^(.*?):(\\d+):(\\d+):\\s+(warning|error):\\s+(.*)$",
+                    "file": 1, "line": 2, "column": 3, "severity": 4, "message": 5
+                }
+            }
+        },
+        {
+            // Quits a running instance first, then opens the freshly built app.
+            "label": "Run: ScanArchiv.app",
+            "type": "shell",
+            "command": "pkill -x ScanArchiv; open build/ScanArchiv.app",
+            "dependsOn": "Build: ScanArchiv.app (Release)",
+            "problemMatcher": []
+        },
+        {
+            // Runs the binary directly so its output appears in this terminal (stop the task to quit).
+            "label": "Run: ScanArchiv.app (in terminal)",
+            "type": "shell",
+            "command": "pkill -x ScanArchiv; build/ScanArchiv.app/Contents/MacOS/ScanArchiv",
+            "dependsOn": "Build: ScanArchiv.app (Release)",
+            "isBackground": true,
+            "problemMatcher": []
+        },
+        {
+            // Ad hoc signed with sandbox entitlements: build/AppStore/The Archiver.app (for testing, no certificates needed).
+            "label": "App Store: Build (ad hoc, sandbox)",
+            "type": "shell",
+            "command": "./build-appstore.sh",
+            "options": { "env": { "SIGN_IDENTITY": "" } },
+            "problemMatcher": []
+        },
+        {
+            "label": "App Store: Run sandbox build",
+            "type": "shell",
+            "command": "pkill -x ScanArchiv; open -n 'build/AppStore/The Archiver.app'",
+            "dependsOn": "App Store: Build (ad hoc, sandbox)",
+            "problemMatcher": []
+        },
+        {
+            // Signed package for upload: build/AppStore/TheArchiver.pkg.
+            // SIGN_IDENTITY, INSTALLER_IDENTITY and PROFILE must be set in the environment VS Code was started from.
+            "label": "App Store: Build signed package (.pkg)",
+            "type": "shell",
+            "command": "test -n \"$SIGN_IDENTITY\" || { echo 'SIGN_IDENTITY, INSTALLER_IDENTITY and PROFILE must be set'; exit 1; }; ./build-appstore.sh",
+            "problemMatcher": []
+        },
+        {
+            "label": "Test: swift test",
+            "type": "shell",
+            "command": "swift test",
+            "group": "test",
+            "problemMatcher": []
+        }
+    ]
+}
