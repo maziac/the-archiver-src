@@ -65,7 +65,7 @@ Vorhandene PDFs und Bilder werden vollautomatisch archiviert, ohne Vorschau:
 - **Ordner:** Beim Ablegen eines Ordners fragt ein Dialog, ob **Unterordner** einbezogen werden sollen und welche
   **Dateitypen** (PDFs, Bilder) übernommen werden. Er zeigt vorab, wie viele Dateien gefunden wurden; die Auswahl
   wird gemerkt. Das Kopieren läuft im Hintergrund, der Fortschritt steht in der Kopfzeile des Eingangs.
-- **Eingangsordner** (Standard `~/Documents/ScanArchiv-Eingang`, änderbar in ⌘,): Was du dort hineinlegst,
+- **Eingangsordner** (Standard `~/Documents/Archiver-Inbox`, änderbar in ⌘,): Was du dort hineinlegst,
   wird automatisch verarbeitet, sowohl im laufenden Betrieb als auch beim nächsten Start der App.
   Eine Datei wird erst übernommen, wenn sie 2 s lang unverändert ist (laufende Kopiervorgänge).
 - Die Dateien laufen **nacheinander** durch: Text (eingebettet oder per OCR) → Titel, Beschreibung, Datum →

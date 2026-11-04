@@ -56,14 +56,14 @@ grün. Frage nach, wenn eine Anforderung unklar ist, statt zu raten.
 
 ## 3. Dateien und Formate
 
-### 3.1 Archivordner (Standard `~/Documents/ScanArchiv`)
+### 3.1 Archivordner (Standard `~/Documents/Archiver`)
 - Dateiname: `JJJJ-MM-TT_NNNNNN_Titel.pdf` (Dokumentdatum, 6-stellige Nummer, Titel als „Slug“:
   Umlaute erhalten, unzulässige Zeichen entfernt, Länge begrenzt; ohne Titel `JJJJ-MM-TT_NNNNNN.pdf`).
 - `counter.json` – letzte vergebene Nummer.
 - `.scanarchiv-index.sqlite` – Suchindex (Cache).
 - `.scanarchiv-tags.json` – gespeicherte Suchen (Tags), gehören zum Archiv.
 
-### 3.2 Eingangsordner (Standard `~/Documents/ScanArchiv-Eingang`)
+### 3.2 Eingangsordner (Standard `~/Documents/Archiver-Inbox`)
 - Unterordner `Fehler/` (nicht verarbeitbar) und `Duplikate/` (gleiche SHA-256 wie ein archiviertes
   Original).
 

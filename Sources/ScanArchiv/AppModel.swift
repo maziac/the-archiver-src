@@ -26,14 +26,16 @@ enum SettingsKey {
     /// Symbol in der macOS-Menüleiste anzeigen
     static let showInMenuBar = "showInMenuBar"
 
-    static var defaultArchivePath: String {
+    private static var documentsFolder: URL {
         FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
-            .appendingPathComponent("ScanArchiv").path
+    }
+
+    static var defaultArchivePath: String {
+        documentsFolder.appendingPathComponent("Archiver").path
     }
 
     static var defaultInboxPath: String {
-        FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
-            .appendingPathComponent("ScanArchiv-Eingang").path
+        documentsFolder.appendingPathComponent("Archiver-Inbox").path
     }
 
     static func registerDefaults() {
