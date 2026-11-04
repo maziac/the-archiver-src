@@ -27,7 +27,7 @@ struct PDFBuilderTests {
         #expect(text.contains("Stromrechnung"))
     }
 
-    @Test func pdfIsSearchableAndStamped() async throws {
+    @Test func pdfIsSearchableWithoutStamp() async throws {
         let images = [Self.renderPage("Stromrechnung Oktober"), Self.renderPage("Zahlungsbedingungen")]
         var pages: [PDFPageInput] = []
         for image in images { pages.append(PDFPageInput(image: image, lines: try await OCRService.recognize(image))) }
@@ -41,7 +41,7 @@ struct PDFBuilderTests {
 
         let page1 = pdf.page(at: 0)?.string ?? ""
         #expect(page1.contains("Stromrechnung"))
-        #expect(page1.contains("Nr. 000123"))
+        #expect(!page1.contains("Nr. 000123"), "Stempel wird nicht gespeichert")
         #expect(pdf.page(at: 1)?.string?.contains("Zahlungsbedingungen") == true)
         #expect(pdf.page(at: 1)?.string?.contains("000123") == false)
 
@@ -125,7 +125,7 @@ struct PDFBuilderTests {
     @Test func appendedTextLayerMatchesWordPositions() async throws {
         let (image, span) = Self.renderWordLine()
         let lines = try await OCRService.recognize(image)
-        let original = try PDFBuilder.build(pages: [PDFPageInput(image: image, lines: [])], number: 1, date: date, dpi: 150, stamp: false)
+        let original = try PDFBuilder.build(pages: [PDFPageInput(image: image, lines: [])], number: 1, date: date, dpi: 150)
         let meta = DocumentMetadata(number: 1, documentDate: date, dateSource: .ai, titleSource: .ai, archivedAt: date, source: .pdf,
                                     originalFileName: "a.pdf", pages: [.ocr], storage: .appended)
         let data = try PDFAppender.stamp(original: original, stampText: "Nr. 000001", overlays: [.init(pageIndex: 0, lines: lines)],

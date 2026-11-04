@@ -56,11 +56,11 @@ public enum PDFBuilder {
     }
 
     /// Baut ein durchsuchbares PDF: Seitenbild bzw. Vektor-Seite + unsichtbare OCR-Textebene je Seite,
-    /// sichtbarer Nummernstempel auf Seite 1 und Standard-Metadaten (Titel, Beschreibung, Keywords).
+    /// und Standard-Metadaten (Titel, Beschreibung, Keywords). Der Nummernstempel wird **nicht** gespeichert,
+    /// sondern nur beim Anzeigen, Drucken und Kopieren gezeichnet (`DocumentStamp`).
     /// Die Bilder werden so eingebettet, wie sie übergeben werden (Kompression vorher per `PageCompressor`).
-    /// - stamp: false = ohne Nummernstempel (z. B. beim Zusammenfassen von Bildern vor dem Import)
     public static func build(pages: [PDFPageInput], number: Int, date: Date, dpi: Double,
-                             title: String = "", summary: String = "", stamp: Bool = true) throws -> Data {
+                             title: String = "", summary: String = "") throws -> Data {
         let data = NSMutableData()
         let numberText = Archive.formatNumber(number)
         let fallbackTitle = Archive.fileName(date: date, number: number).replacingOccurrences(of: ".pdf", with: "")
@@ -75,7 +75,7 @@ public enum PDFBuilder {
             throw PDFBuilderError.contextCreationFailed
         }
 
-        for (index, page) in pages.enumerated() {
+        for page in pages {
             let size: CGSize
             switch page.content {
             case let .image(image, pageDPI):
@@ -102,9 +102,6 @@ public enum PDFBuilder {
                 ctx.restoreGState()
             }
             drawInvisibleText(page.lines, in: ctx, pageSize: size)
-            if index == 0, stamp {
-                drawStamp(stampText(number: number, date: date), in: ctx, pageSize: size)
-            }
 
             ctx.endPDFPage()
         }
@@ -184,9 +181,9 @@ public enum PDFBuilder {
         CTLineDraw(ctLine, ctx)
     }
 
-    /// Roter Nummernstempel (echter Text, damit die Nummer im PDF durchsuchbar ist).
+    /// Roter Nummernstempel (nur zur Laufzeit: Anzeige, Druck, Kopie mit Nummer).
     /// Lage des Stempels auf der angezeigten Seite: Kasten und Textursprung (oben rechts, 14 pt Rand).
-    /// Gemeinsam für alle Erzeugungswege, damit sich ein Stempel später exakt überdecken lässt.
+    /// Gemeinsam für Anzeige (`StampPage`) und Kopie mit Nummer (`PDFAppender.addStamp`).
     public static func stampGeometry(_ text: String, pageSize: CGSize) -> (box: CGRect, origin: CGPoint) {
         let font = CTFontCreateWithName("Helvetica-Bold" as CFString, 9, nil)
         let line = CTLineCreateWithAttributedString(NSAttributedString(string: text, attributes: [.init(kCTFontAttributeName as String): font]))

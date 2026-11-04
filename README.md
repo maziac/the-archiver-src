@@ -10,7 +10,7 @@ Mac-App für beidseitige Dokumente mit einem Scanner, der über den Einzug nur e
 - schlägt **Datum, Titel und Kurzbeschreibung** vor. Das Datum kommt aus dem Text, Titel und Beschreibung erzeugt Apple Intelligence lokal. Ohne gefundenes Datum gilt das heutige.
 - Dateiname `JJJJ-MM-TT_NNNNNN_Titel.pdf` mit fortlaufender, eindeutiger Nummer
 - automatischer Import vorhandener PDFs/Bilder über einen überwachten Eingangsordner oder per Drag & Drop
-- Nummer als roter Stempel oben rechts auf Seite 1 und in den PDF-Metadaten (Stichwörter). Titel und Beschreibung stehen als PDF-Titel und PDF-Betreff im Dokument.
+- Nummer in den PDF-Metadaten (Stichwörter); in der Vorschau, beim Drucken und beim Kopieren erscheint sie als roter Stempel oben rechts auf Seite 1 (die Datei selbst bleibt ohne Stempel). Titel und Beschreibung stehen als PDF-Titel und PDF-Betreff im Dokument.
 - Archiv-Tab: Stichwortsuche in Text, Titel und Beschreibung (UND-verknüpft, Präfix, Umlaute egal) oder nach Nummer; Doppelklick öffnet das PDF
 
 ## Bauen & Starten
@@ -69,7 +69,7 @@ Vorhandene PDFs und Bilder werden vollautomatisch archiviert, ohne Vorschau:
   wird automatisch verarbeitet, sowohl im laufenden Betrieb als auch beim nächsten Start der App.
   Eine Datei wird erst übernommen, wenn sie 2 s lang unverändert ist (laufende Kopiervorgänge).
 - Die Dateien laufen **nacheinander** durch: Text (eingebettet oder per OCR) → Titel, Beschreibung, Datum →
-  Nummer, Stempel → Archiv. Danach wandert die Datei aus dem Eingang **in den Papierkorb**.
+  Nummer → Archiv. Danach wandert die Datei aus dem Eingang **in den Papierkorb**.
 - Nicht verarbeitbare Dateien (defekt, unbekanntes Format) kommen nach **`Eingang/Fehler`**.
 - **Duplikate:** Die App merkt sich eine Prüfsumme (SHA-256) jeder importierten Originaldatei. Ist dieselbe
   Datei schon archiviert, wird sie nicht erneut aufgenommen, sondern nach **`Eingang/Duplikate`** verschoben
@@ -80,7 +80,7 @@ Vorhandene PDFs und Bilder werden vollautomatisch archiviert, ohne Vorschau:
 
 PDFs bleiben dabei (mit der Standardeinstellung „Original“) inhaltlich unverändert: Text, Bilder in
 Originalauflösung und Farbe, Links und Lesezeichen bleiben erhalten. Seiten mit eigenem Text werden nicht erneut erkannt; Seiten, die nur ein
-Bild sind, bekommen eine unsichtbare OCR-Textebene. Hinzu kommen nur der rote Stempel und die Metadaten.
+Bild sind, bekommen eine unsichtbare OCR-Textebene. Hinzu kommen nur die Metadaten.
 Für Titel, Beschreibung und Datum werden die ersten zwei Seiten verwendet.
 
 ## Kategorien
@@ -162,7 +162,18 @@ du Titel bzw. Datum über „Bearbeiten …“ ergänzt, über „Titel erzeugen
 **„Als geprüft markieren“**. Die Vermerke stehen im PDF selbst (siehe unten).
 
 Im Archiv lassen sich Datum, Titel und Beschreibung per Rechtsklick → **Bearbeiten …** ändern. Die Datei
-wird dabei umbenannt. Der Stempel auf Seite 1 behält das Datum vom Speichern.
+wird dabei umbenannt. Der Stempel zeigt sofort das neue Datum; das Aufnahmedatum („Archiviert“ in der
+Info) bleibt erhalten.
+
+**Der rote Stempel** („Nr. 000123 · TT.MM.JJJJ“, Dokumentdatum) steht **nicht in der Datei**, sondern wird
+aus den Metadaten gezeichnet: in der Vorschau, beim Drucken und beim Kopieren mit Nummer. Rechtsklick in
+der Liste bietet:
+- **Kopieren** (auch ⌘C, mehrere Dokumente möglich): legt die Dokumente mit Stempel in die Zwischenablage,
+  z. B. zum Einsetzen im Finder (der Stempel wird an eine Kopie angehängt, das Archiv bleibt unverändert).
+- **Kopieren ohne Nummer**: die Archivdatei, wie sie ist.
+- **Drucken …** (mit Stempel) und **Drucken ohne Nummer …**.
+
+„Öffnen“, „In Vorschau.app öffnen“ und „Teilen“ verwenden die Archivdatei, also ohne Stempel.
 **Vorschau im Archiv:** Ein Klick auf ein Dokument zeigt es rechts neben der Liste. Oben rechts
 gibt es **Drucken** (⌘P, auch per Rechtsklick in der Liste) und **Teilen** (Mail als Anhang,
 Nachrichten, AirDrop …). Das Suchfeld
@@ -174,9 +185,8 @@ zum vorherigen. Die Trefferliste unter dem Dokument zeigt Seite und Textumgebung
 Dokuments. Ziehen ändert die Reihenfolge, ein Klick dreht um 180°, ein Rechtsklick um 90°. Bei
 Dokumenten, die beim Import umsortiert wurden, steht **Reihenfolge prüfen …** ganz oben im Menü (auch
 in der Info ⓘ), und **Wie im Original** stellt die Reihenfolge der importierten Datei wieder her.
-Gespeichert wird inkrementell; der bisherige Dateiinhalt bleibt erhalten. Der Stempel gehört immer auf
-Seite 1: Wird eine andere Seite zur ersten, wird der alte Stempel weiß überdeckt, und die neue erste
-Seite bekommt denselben Stempel (Nummer und Datum bleiben). Danach ist der Reihenfolge-Vermerk erledigt.
+Gespeichert wird inkrementell; der bisherige Dateiinhalt bleibt erhalten. Die Nummer erscheint immer auf
+der (neuen) ersten Seite, die Metadaten ziehen mit. Danach ist der Reihenfolge-Vermerk erledigt.
 
 Per Rechtsklick → **Löschen …** oder mit der Entf-Taste landen Dokumente nach einer Rückfrage im
 Papierkorb und lassen sich dort wiederherstellen. Ihre Nummern werden nicht neu vergeben.
@@ -200,8 +210,8 @@ werden nur eindeutige Angaben in Kopf- oder Fußzeile: „Seite 2 von 4“, „S
 „Blatt 2“, „Page 2 of 4“, „2/4“ und „- 2 -“. Nackte Zahlen zählen nicht, damit Beträge oder
 Positionsnummern keinen Fehlalarm auslösen.
 
-- **Import (Eingang):** Ist die richtige Reihenfolge eindeutig, werden die Seiten vor dem Stempeln
-  umsortiert. Der Stempel landet so auf der richtigen ersten Seite. Das Dokument wird **gelb** markiert
+- **Import (Eingang):** Ist die richtige Reihenfolge eindeutig, werden die Seiten vor dem Speichern
+  umsortiert. Die Nummer erscheint so auf der richtigen ersten Seite. Das Dokument wird **gelb** markiert
   („Seitenreihenfolge laut Seitenzahlen korrigiert (vorher 1, 3, 2) – bitte prüfen“), und die Info
   zeigt die Originalreihenfolge. Das Original bleibt dabei unverändert; nur der Seitenbaum wird
   inkrementell neu angehängt. Eine unnummerierte erste Seite (Anschreiben) bleibt vorn. Unklare Fälle,
@@ -228,19 +238,19 @@ Farbmodus: *Farbe/Original*, *Graustufen* oder *Schwarz-Weiß (1 Bit)*.
 
 ### Importierte PDFs bleiben unverändert (inkrementelles Speichern)
 
-Archiver schreibt importierte PDFs nicht neu, sondern **hängt** Stempel, OCR-Textebene (nur für Bildseiten)
+Archiver schreibt importierte PDFs nicht neu, sondern **hängt** OCR-Textebene (nur für Bildseiten)
 und Metadaten per inkrementellem Update an das unveränderte Original an – ein Standardverfahren von PDF.
 So bleiben Bilder (z. B. CCITT-Fax-Scans), Schriften und Objekt-Streams bitgenau erhalten; der Aufschlag
 liegt typisch bei 2–6 KB. Beispiel: ein 6-seitiges Versicherungs-PDF mit CCITT-Scans wuchs früher beim
 Neuschreiben durch PDFKit um 533 KB, jetzt um etwa 3 KB.
 
-- Der Stempel nutzt die PDF-Standardschrift Helvetica-Bold (ohne Einbettung), die OCR-Ebene eine von
-  Archiver erzeugte **Schrift ohne Zeichenformen** mit nur den benutzten Zeichen, wie bei OCRmyPDF.
+- Der Stempel einer Kopie mit Nummer nutzt die PDF-Standardschrift Helvetica-Bold (ohne Einbettung), die
+  OCR-Ebene eine von Archiver erzeugte **Schrift ohne Zeichenformen** mit nur den benutzten Zeichen, wie bei OCRmyPDF.
 - Beim Import entstehen mehrere Fassungen: angehängt, durch PDFKit neu geschrieben und – bei aktiver
-  Kompression – mit neu erzeugten Bildseiten. Jede wird geprüft (Text aller Seiten, Stempel, Metadaten);
+  Kompression – mit neu erzeugten Bildseiten. Jede wird geprüft (Text aller Seiten, Metadaten);
   die **kleinste gültige** wird gespeichert. Welche es ist, steht in der Info unter „Speicherung“.
 - Auch spätere Änderungen (Bearbeiten, „Als geprüft“, „Titel erzeugen“) werden angehängt (unter 1 KB).
-- Die Info nennt bei „Dateigröße“ nur, was tatsächlich hinzukam, z. B. „+3 KB: Stempel, Metadaten angehängt“.
+- Die Info nennt bei „Dateigröße“ nur, was tatsächlich hinzukam, z. B. „+3 KB: Metadaten angehängt“.
 
 ## Was im PDF gespeichert wird
 

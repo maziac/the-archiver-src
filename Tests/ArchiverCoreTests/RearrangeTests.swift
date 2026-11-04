@@ -42,7 +42,7 @@ struct RearrangeTests {
             PageNumberingTests.makePDF(pages: words.map { ($0, "Fußzeile") }, to: source)
             let saved = try archive.save(date: date) { number in
                 if kind == .appended {
-                    return try PDFAppender.stamp(original: Data(contentsOf: source), stampText: PDFBuilder.stampText(number: number, date: date),
+                    return try PDFAppender.stamp(original: Data(contentsOf: source),
                                                  overlays: [], meta: meta(number, .appended), title: "", summary: "")
                 }
                 return try PDFStamper.stamp(source: source, pages: (0..<3).map { PDFStamper.PageEdit(index: $0) }, number: number,
@@ -52,33 +52,50 @@ struct RearrangeTests {
         }
     }
 
-    /// Anteil roter Pixel im Stempelbereich einer Seite (so wie sie angezeigt wird).
-    func redShare(_ url: URL, page index: Int, stampText: String) throws -> Double {
-        let document = try #require(CGPDFDocument(url as CFURL))
-        let dpi = 144.0
-        let image = try #require(ImageTools.renderPDFPage(document, index: index, dpi: dpi, gray: false))
-        let size = CGSize(width: Double(image.width) / dpi * 72, height: Double(image.height) / dpi * 72)
+    /// Anteil roter Pixel im Stempelbereich einer Seite (so wie sie angezeigt wird, inkl. Laufzeit-Stempel).
+    static func redShare(_ page: PDFPage, stampText: String) throws -> Double {
+        let scale = 2.0
+        let bounds = page.bounds(for: .cropBox)
+        let size = page.rotation % 180 == 0 ? bounds.size : CGSize(width: bounds.height, height: bounds.width)
+        // selbst zeichnen wie PDFView/Druck (`draw(with:to:)`, inkl. `StampPage`), Drehung per `transform`
+        let width = Int(size.width * scale), height = Int(size.height * scale)
+        let ctx = try #require(CGContext(data: nil, width: width, height: height, bitsPerComponent: 8, bytesPerRow: width * 4,
+                                         space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue))
+        ctx.setFillColor(.white)
+        ctx.fill(CGRect(x: 0, y: 0, width: width, height: height))
+        ctx.scaleBy(x: scale, y: scale)
+        page.transform(ctx, for: .cropBox)
+        page.draw(with: .cropBox, to: ctx)
+        let pixels = try #require(ctx.data).assumingMemoryBound(to: UInt8.self)
+        let sx = Double(width) / size.width, sy = Double(height) / size.height
         let box = PDFBuilder.stampGeometry(stampText, pageSize: size).box
-        let data = image.dataProvider!.data! as Data
-        let scale = dpi / 72
         var red = 0, total = 0
-        for y in Int(box.minY * scale)..<Int(box.maxY * scale) {
-            for x in Int(box.minX * scale)..<Int(box.maxX * scale) {
-                let row = image.height - 1 - y
-                let i = row * image.bytesPerRow + x * 4
+        for y in Int(box.minY * sy)..<min(Int(box.maxY * sy), height) {
+            for x in Int(box.minX * sx)..<min(Int(box.maxX * sx), width) {
+                let row = height - 1 - y  // Speicher beginnt oben
+                let i = row * width * 4 + x * 4
                 total += 1
-                if data[i] > 150, data[i + 1] < 90, data[i + 2] < 90 { red += 1 }
+                if pixels[i] > 150, pixels[i + 1] < 90, pixels[i + 2] < 90 { red += 1 }
             }
         }
         return Double(red) / Double(max(total, 1))
     }
 
-    @Test("Stempel wandert auf die neue erste Seite", arguments: Kind.allCases)
+    /// Roter Anteil im Stempelbereich: `stamped` = so wie Archiver es anzeigt/druckt, sonst die reine Datei.
+    func redShare(_ url: URL, page index: Int, stampText: String, stamped: Bool) throws -> Double {
+        let document = try #require(stamped ? DocumentStamp.document(url: url) : PDFDocument(url: url))
+        let page = try #require(document.page(at: index))
+        // Seite hält ihr Dokument nur schwach – Dokument bis nach dem Zeichnen am Leben halten
+        return try withExtendedLifetime(document) { try Self.redShare(page, stampText: stampText) }
+    }
+
+    @Test("Stempel steht nicht in der Datei und erscheint auf der neuen ersten Seite", arguments: Kind.allCases)
     func movesStamp(kind: Kind) async throws {
         let (archive, url) = try await makeArchived(kind)
         let before = try Data(contentsOf: url)
         let stamp = PDFBuilder.stampText(number: 1, date: date)
-        #expect(try redShare(url, page: 0, stampText: stamp) > 0.02)
+        #expect(try redShare(url, page: 0, stampText: stamp, stamped: false) == 0)
+        #expect(try redShare(url, page: 0, stampText: stamp, stamped: true) > 0.02)
 
         let result = try archive.rearrange(url: url, order: [2, 0, 1], rotations: [0, 0, 90], title: "", summary: "")
         let after = try Data(contentsOf: url)
@@ -87,14 +104,17 @@ struct RearrangeTests {
         #expect(pdf.page(at: 0)?.string?.contains("Charlottenburg") == true)
         #expect(pdf.page(at: 1)?.string?.contains("Alphabetisch") == true)
         #expect(pdf.page(at: 2)?.string?.contains("Bravourstueck") == true)
-        #expect(pdf.page(at: 0)?.string?.contains(stamp) == true)
+        #expect(pdf.page(at: 0)?.string?.contains(stamp) == false)
         #expect(pdf.page(at: 2)?.rotation == 90)
         #expect(PDFMetadata.read(pdf)?.number == 1)
+        #expect(pdf.page(at: 1)?.annotations.contains { $0.value(forAnnotationKey: PDFMetadata.annotationKey) != nil } == false,
+                "Metadaten-Anmerkung ist umgezogen")
         #expect(result.meta.pageOrder == [2, 0, 1])
         #expect(result.pageTexts[0].contains("Charlottenburg"))
-        // sichtbar: neuer Stempel vorn, alter überdeckt
-        #expect(try redShare(url, page: 0, stampText: stamp) > 0.02)
-        #expect(try redShare(url, page: 1, stampText: stamp) == 0)
+        // angezeigt: Stempel vorn, sonst nirgends
+        #expect(try redShare(url, page: 0, stampText: stamp, stamped: true) > 0.02)
+        #expect(try redShare(url, page: 1, stampText: stamp, stamped: true) == 0)
+        #expect(try redShare(url, page: 0, stampText: stamp, stamped: false) == 0)
     }
 
     @Test("Nur drehen der ersten Seite: Stempel bleibt oben rechts")
@@ -104,7 +124,7 @@ struct RearrangeTests {
         _ = try archive.rearrange(url: url, order: [0, 1, 2], rotations: [180, 0, 0], title: "", summary: "")
         let pdf = try #require(PDFDocument(url: url))
         #expect(pdf.page(at: 0)?.rotation == 180)
-        #expect(try redShare(url, page: 0, stampText: stamp) > 0.02)
+        #expect(try redShare(url, page: 0, stampText: stamp, stamped: true) > 0.02)
         #expect(PDFMetadata.read(pdf)?.number == 1)
     }
 
@@ -129,7 +149,8 @@ struct RearrangeTests {
         #expect(record.issues == [.noSuggestion(DocumentIssue.suggestionDisabled)])  // nur der Reihenfolge-Vermerk ist weg
         let pdf = try #require(PDFDocument(url: imported.url))
         #expect(pdf.page(at: 1)?.string?.contains("Drittens") == true)
-        #expect(pdf.page(at: 0)?.string?.contains("Nr. 000001") == true)
+        #expect(pdf.page(at: 0)?.string?.contains("Nr. 000001") == false)
+        #expect(PDFMetadata.read(pdf)?.number == 1)
     }
 
     @Test func invalidOrderIsRejected() async throws {

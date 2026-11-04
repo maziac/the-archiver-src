@@ -43,12 +43,12 @@ grün. Frage nach, wenn eine Anforderung unklar ist, statt zu raten.
    reiner Cache und muss sich jederzeit vollständig aus den PDFs neu aufbauen lassen.
 2. **Eindeutige, fortlaufende Nummern, nie wiederverwendet.** Nächste Nummer = max(`counter.json`,
    höchste Nummer eines PDFs im Archivordner) + 1. Auch gelöschte Nummern werden nicht neu vergeben.
-3. **Importierte PDFs bleiben inhaltlich unverändert.** Ergänzungen (Stempel, OCR-Textebene, Metadaten,
+3. **Importierte PDFs bleiben inhaltlich unverändert.** Ergänzungen (OCR-Textebene, Metadaten,
    spätere Änderungen) werden per **inkrementellem PDF-Update** angehängt – das Original bleibt als
    bitgenaues Präfix der Datei erhalten. Nur wenn eine andere Fassung nachweislich kleiner und gültig ist,
    darf sie gewinnen.
 4. **Nichts geht verloren:** Jede erzeugte Datei wird vor dem Ersetzen geprüft (Seitenzahl, Text,
-   Stempel, Metadaten). Schreiben immer atomar (temporäre Datei im selben Ordner + `replaceItemAt`).
+   Metadaten). Schreiben immer atomar (temporäre Datei im selben Ordner + `replaceItemAt`).
 5. **Alles lokal.** OCR mit Vision, Zusammenfassung mit Apple Intelligence auf dem Gerät; kein Netzwerk
    außer zum Scanner.
 
@@ -68,10 +68,12 @@ grün. Frage nach, wenn eine Anforderung unklar ist, statt zu raten.
   Original).
 
 ### 3.3 Inhalt jedes Archiv-PDFs
-- **Roter Stempel** oben rechts auf Seite 1: `Nr. 000123 · TT.MM.JJJJ` (Helvetica-Bold 9 pt, Rot
-  0.85/0.05/0.05, weißer Kasten mit rotem Rahmen, 14 pt Rand, 3 pt Innenabstand). Die Geometrie ist in
-  einer einzigen Funktion `stampGeometry(text, pageSize)` definiert und wird von allen Erzeugungswegen
-  benutzt (wichtig für das spätere Verschieben des Stempels).
+- **Kein eingebrannter Stempel.** Der rote Stempel oben rechts auf Seite 1 – `Nr. 000123 · TT.MM.JJJJ`
+  mit Nummer und **Dokumentdatum** aus den Metadaten (Helvetica-Bold 9 pt, Rot 0.85/0.05/0.05, weißer
+  Kasten mit rotem Rahmen, 14 pt Rand, 3 pt Innenabstand) – wird nur zur Laufzeit gezeichnet: Vorschau und
+  Druck über eine `PDFPage`-Unterklasse (PDFDocument-Delegate), „Kopieren“ (mit Nummer) als inkrementell
+  angehängter Stempel an einer temporären Kopie. Ein geändertes Datum erscheint so sofort im Stempel. Die
+  Geometrie steht in einer einzigen Funktion `stampGeometry(text, pageSize)`.
 - **Unsichtbare OCR-Textebene** auf Bildseiten (Textmodus 3), so dass Kopieren und Suchen in jedem
   PDF-Betrachter funktionieren.
 - **Dokumentinfos:** Titel (oder Dateiname ohne Endung), Betreff = Beschreibung, Stichwörter
@@ -184,7 +186,7 @@ Auf der Startseite kann man außerdem Dateien ablegen; sie gehen in den Eingang 
    sonst `none` + `noText`.
 3. **Bild:** OCR, Auflösung aus den Bild-Metadaten (sonst A4-Breite), einseitiges PDF in voller
    Auflösung; JPEG-Originale ohne erneute Kompression einbetten.
-4. **Seitenreihenfolge** (nur PDFs): `PageNumbering.analyze`. Eindeutig falsch → vor dem Stempeln
+4. **Seitenreihenfolge** (nur PDFs): `PageNumbering.analyze`. Eindeutig falsch → vor dem Speichern
    umsortieren (Texte, Textherkunft, OCR-Ebenen, Seitennummern in `noText` mitziehen), Hinweis
    `pageOrderCorrected`, `meta.pageOrder`; unklar → Hinweis `pageOrderUncertain`.
 5. **Vorschlag** aus den ersten zwei Seiten (Apple Intelligence), sofern Text vorhanden und eingeschaltet.
@@ -193,10 +195,10 @@ Auf der Startseite kann man außerdem Dateien ablegen; sie gehen in den Eingang 
    `11.12.2025 …`), dann **PDF-Erstelldatum**, dann das **frühere von Erstell-/Änderungsdatum** im
    Dateisystem (plausibel: 1970 bis morgen); (c) heute + Problem `noDate`.
 7. **Fassungen erzeugen** (Nummer vom Archiv): (1) *angehängt* – Original + inkrementelles Update
-   (Stempel, Textebene, Metadaten, ggf. neuer Seitenbaum); (2) *neu geschrieben* mit PDFKit; (3) *neu
+   (Textebene, Metadaten, ggf. neuer Seitenbaum); (2) *neu geschrieben* mit PDFKit; (3) *neu
    erzeugt* aus komprimierten Seitenbildern (nur wenn Bildseiten vorhanden und Kompression/Farbe nicht
    „Original“).
-8. **Prüfen** jeder Fassung (Seitenzahl, Text auf allen Textseiten, Stempeltext findbar, Metadaten
+8. **Prüfen** jeder Fassung (Seitenzahl, Text auf allen Textseiten, Metadaten
    lesbar mit richtiger Nummer, bei Umsortierung Stichprobe typischer Wörter je Seite) und die
    **kleinste gültige** speichern; Speicherart in den Metadaten.
 9. Index-Eintrag.
@@ -211,7 +213,7 @@ Auf der Startseite kann man außerdem Dateien ablegen; sie gehen in den Eingang 
 
 ### 4.8 PDF-Technik
 - **Neues PDF** (`PDFBuilder`): CGContext-PDF; Seiteninhalt Bild (oder Vektorseite), unsichtbare
-  Textebene, Stempel auf Seite 1. Metadaten danach mit PDFKit.
+  Textebene. Metadaten danach mit PDFKit.
 - **Unsichtbare Textebene mit eigener glyphloser TrueType-Schrift**, zur Laufzeit erzeugt (nur benutzte
   Zeichen, großer Zeichenvorrat inkl. Umlaute und €, Laufweiten wie Helvetica). Text **nicht horizontal
   stauchen**, sondern die Schriftgröße verkleinern, bis die Zeile in die Box passt – sonst liefert die
@@ -221,15 +223,15 @@ Auf der Startseite kann man außerdem Dateien ablegen; sie gehen in den Eingang 
   (Resources, MediaBox, CropBox, Rotate), Flate. Strings hex/oktal escapen. Schreibt eine
   Querverweis-Tabelle bzw. einen Querverweis-Stream passend zum Original, Trailer mit `/Prev`.
 - **`PDFAppender`:**
-  - `stamp(original, stampText, overlays, meta, title, summary, order?)`: Stempel in Standardschrift
-    Helvetica-Bold (WinAnsi, nicht eingebettet), Textebene in der glyphlosen Type0-Schrift mit ToUnicode,
+  - `stamp(original, stampText?, overlays, meta, title, summary, order?)`: optional Stempel in
+    Standardschrift Helvetica-Bold (WinAnsi, nicht eingebettet; beim Import nicht genutzt), Textebene in der glyphlosen Type0-Schrift mit ToUnicode,
     Inhalte als zusätzliche Content-Streams mit vorangestelltem `q` und `Q q <Matrix> cm …Q` (damit sie
     mit dem Grafikzustand der Seite beginnen), Metadaten-Anmerkung, Info-Dictionary; optional neuer
     flacher Seitenbaum (geerbte Attribute in die Seiten kopieren, Catalog neu).
+  - `addStamp(data, stampText)`: nur den Stempel auf Seite 1 anhängen (Kopie mit Nummer).
   - `updateMetadata(data, meta, title, summary)`.
-  - `rearrange(data, order, rotations, stampText, meta, …)`: neuer Seitenbaum, `Rotate` je Seite; wird
-    eine andere Seite zur ersten (oder die erste gedreht): alte Stempelfläche weiß überdecken (in der alten
-    Lage), Stempel auf der neuen ersten Seite, Metadaten-Anmerkung umziehen.
+  - `rearrange(data, order, rotations, meta, …)`: neuer Seitenbaum, `Rotate` je Seite; wird eine andere
+    Seite zur ersten: Metadaten-Anmerkung umziehen.
 - **PDFKit-Fallstricke:** eigene Info-Schlüssel gehen verloren (→ Anmerkung); `CreationDate` wird beim
   Speichern überschrieben; Neuschreiben kodiert CCITT-Bilder als Flate um und bettet Schriften je Seite
   ein (Dateien werden viel größer) – deshalb Anhängen bevorzugen. Eigene `PDFPage`-Unterklasse
@@ -266,7 +268,7 @@ Auf der Startseite kann man außerdem Dateien ablegen; sie gehen in den Eingang 
   Typfilter.
 - `DocumentInfo`: Info-Zeilen (Quelle, Originaldatei mit Größe, Archiviert, Dokumentdatum mit Herkunft
   „aus dem Dateinamen – kein Datum im Text“ usw., Titel-Herkunft, Scan, Speicherung, Kompression,
-  Dateigröße mit Änderung „+4 KB: Stempel, Metadaten angehängt“ bzw. „−120 KB durch Kompression“ – nur
+  Dateigröße mit Änderung „+4 KB: Metadaten angehängt“ bzw. „−120 KB durch Kompression“ – nur
   tatsächlich Hinzugefügtes nennen, Text je Seite inkl. „2 Seiten leer“, Seitenreihenfolge, OCR,
   Erstellt mit, Zuletzt geändert mit).
 
@@ -318,11 +320,12 @@ Auf der Startseite kann man außerdem Dateien ablegen; sie gehen in den Eingang 
   vollständiger Beschreibung), Seiten, Datei (Tooltip mit allen Info-Zeilen). Rot/gelb je Schwere.
   Doppelklick öffnet in Vorschau.app.
 - Kontextmenü: „Reihenfolge prüfen …“ (nur mit Reihenfolge-Hinweis, oben), Öffnen, Bearbeiten …,
-  Seiten bearbeiten …, Drucken …, Im Finder zeigen, Als geprüft markieren, Löschen … (Rückfrage,
+  Seiten bearbeiten …, Kopieren (auch ⌘C, Dateien mit Stempel in die Zwischenablage), Kopieren ohne
+  Nummer, Drucken … (mit Stempel), Drucken ohne Nummer …, Im Finder zeigen, Als geprüft markieren, Löschen … (Rückfrage,
   Papierkorb, auch Entf-Taste).
 - **Bearbeiten:** Datum, Titel, Beschreibung; Datei wird umbenannt, Metadaten angehängt, erledigte
-  Probleme entfernt (Titel gesetzt → `noSuggestion`, Datum bestätigt → `noDate`). Der Stempel behält sein
-  Datum.
+  Probleme entfernt (Titel gesetzt → `noSuggestion`, Datum bestätigt → `noDate`). Der Stempel zeigt das
+  neue Datum; `archivedAt` (Aufnahmedatum) bleibt.
 - **Seiten bearbeiten:** Miniaturen mit Größenregler, Ziehen, Klick 180°, Rechtsklick 90°, „Wie im
   Original“ (bei `pageOrder`), „Zurücksetzen“; **„Sichern“ immer aktiv** – ohne Änderung bestätigt es die
   Reihenfolge (nur Hinweis entfernen). Mit Änderung: `Archive.rearrange` (anhängen, prüfen, atomar
@@ -365,7 +368,7 @@ Siehe `docs/ARCHITEKTUR.md`. Kurzfassung:
 
 ## 6. Umsetzungsreihenfolge (Etappen)
 
-1. Paket, Build-Skript, Archiv (Nummern, Dateinamen), PDFBuilder mit Stempel und Textebene,
+1. Paket, Build-Skript, Archiv (Nummern, Dateinamen), PDFBuilder mit Textebene, Stempel zur Laufzeit,
    OCRService, Tests.
 2. Scanner + Stapelscan + Vorschau + Speichern.
 3. Suchindex + Archiv-Tab (Liste, Suche, Öffnen, Löschen) + Vorschau mit Suche.
@@ -382,7 +385,8 @@ Siehe `docs/ARCHITEKTUR.md`. Kurzfassung:
 ## 7. Abnahmekriterien / Tests (Auswahl)
 
 - Nummern: fortlaufend, nach Löschen nicht wiederverwendet, Zähler und Dateien konsistent.
-- Stempel „Nr. 000001 · TT.MM.JJJJ“ per PDFKit-Textsuche auf Seite 1 findbar; OCR-Text durchsuchbar,
+- Archivdatei ohne Stempel; Kopie mit Nummer: Stempel „Nr. 000001 · TT.MM.JJJJ“ per PDFKit-Textsuche auf
+  Seite 1 findbar, Archivdatei Präfix; Laufzeit-Stempel per Pixelprüfung rot. OCR-Text durchsuchbar,
   ohne Leerzeichen zwischen Buchstaben.
 - Metadaten überstehen Schreiben/Lesen exakt (inkl. Datum, Umlaute).
 - Importiertes Text-PDF: Original ist Präfix der Archivdatei, nur wenige KB angehängt, Links bleiben.
@@ -395,7 +399,7 @@ Siehe `docs/ARCHITEKTUR.md`. Kurzfassung:
 - Ausrichtung: synthetische Seite in 0/90/180/270° wird korrekt erkannt; leere Seite → keine Entscheidung.
 - Seitenreihenfolge: Muster, vertauschte Seiten, Duplex-Fehler, unnummerierte erste Seite, doppelte
   Nummern (unklar), nackte Zahlen ignoriert; Import sortiert um (alle Fassungen).
-- Seiten bearbeiten: Stempel wandert (Pixelprüfung: rot vorn, alte Fläche ohne Rot), Drehung,
+- Seiten bearbeiten: Laufzeit-Stempel auf der neuen ersten Seite (Pixelprüfung), Drehung,
   Metadaten, Original-Präfix erhalten; „Wie im Original“ ergibt `pageOrder == nil`.
 - Leere Seiten: weiß, Staub, Scannerrand, Lochung + DataMatrix, durchscheinender Text → leer;
   Unterschrift, Kritzelei, Text → nicht leer.

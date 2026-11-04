@@ -84,13 +84,11 @@ public enum DocumentInfo {
         return parts.joined(separator: "\n")
     }
 
-    /// z. B. „+4 KB: Stempel, Metadaten angehängt“ oder „−1,7 MB durch Kompression“
+    /// z. B. „+4 KB: Metadaten angehängt“ oder „−1,7 MB durch Kompression“
     static func sizeChange(_ diff: Int, meta: DocumentMetadata) -> String {
         let amount = (diff >= 0 ? "+" : "−") + bytes(abs(diff))
         let ocr = meta.pages.contains(.ocr)
-        var added = ["Stempel"]
-        if ocr { added.append("OCR-Textebene") }
-        added.append("Metadaten")
+        let added = ocr ? ["OCR-Textebene", "Metadaten"] : ["Metadaten"]
         let list = added.joined(separator: ", ")
         switch meta.storage {
         case .appended?:

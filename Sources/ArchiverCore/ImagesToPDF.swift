@@ -4,7 +4,7 @@ import UniformTypeIdentifiers
 
 /// Fasst mehrere Bilddateien zu einem PDF zusammen (eine Seite je Bild, in der übergebenen Reihenfolge).
 /// Die Bilder werden dabei nicht neu kodiert: JPEGs wandern unverändert ins PDF, andere Formate verlustfrei.
-/// Texterkennung, Titel, Stempel und Kompression macht anschließend der normale Import.
+/// Texterkennung, Titel, Nummer und Kompression macht anschließend der normale Import.
 public enum ImagesToPDF {
     public static func combine(_ urls: [URL]) throws -> Data {
         var pages: [PDFPageInput] = []
@@ -18,8 +18,7 @@ public enum ImagesToPDF {
             pages.append(PDFPageInput(encoded: encoded, lines: []))
         }
         guard !pages.isEmpty else { throw ImportError.unreadable("Bilder") }
-        // ohne Nummer/Stempel – das übernimmt der Import
-        return try PDFBuilder.build(pages: pages, number: 0, date: Date(), dpi: 300, stamp: false)
+        return try PDFBuilder.build(pages: pages, number: 0, date: Date(), dpi: 300)
     }
 
     /// Dateidatum eines Bildes (früheres von Erstell- und Änderungsdatum).

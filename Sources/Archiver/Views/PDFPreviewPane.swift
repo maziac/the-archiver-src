@@ -28,7 +28,7 @@ final class PDFPreviewModel {
     func show(url: URL?, query: String) {
         if url != self.url {
             self.url = url
-            document = url.flatMap { PDFDocument(url: $0) }
+            document = url.flatMap { DocumentStamp.document(url: $0) }  // mit Nummernstempel
             meta = document.flatMap(PDFMetadata.read)
             let queryChanged = query != self.query
             self.query = query  // löst bei Änderung die Suche aus
@@ -161,7 +161,7 @@ struct PDFPreviewPane: View {
                                      editPages: editPages.map { edit in { showInfo = false; edit() } })
                 }
             if let url = preview.url {
-                Button { DocumentPrinter.print(url: url) } label: { Image(systemName: "printer") }
+                Button { DocumentPrinter.print(url: url, withNumber: true) } label: { Image(systemName: "printer") }
                     .keyboardShortcut("p", modifiers: .command)
                     .help("Drucken (⌘P)")
                 ShareLink(item: url) { Image(systemName: "square.and.arrow.up") }
@@ -244,11 +244,12 @@ private struct PDFKitView: NSViewRepresentable {
     }
 }
 
-/// Druckt ein Archiv-PDF mit dem normalen macOS-Druckdialog (als Sheet am aktuellen Fenster).
+/// Druckt ein Archiv-PDF mit dem normalen macOS-Druckdialog (als Sheet am aktuellen Fenster),
+/// wahlweise mit dem roten Nummernstempel (zur Laufzeit gezeichnet, steht nicht in der Datei).
 @MainActor
 enum DocumentPrinter {
-    static func print(url: URL) {
-        guard let document = PDFDocument(url: url),
+    static func print(url: URL, withNumber: Bool) {
+        guard let document = withNumber ? DocumentStamp.document(url: url) : PDFDocument(url: url),
               let operation = document.printOperation(for: NSPrintInfo.shared, scalingMode: .pageScaleDownToFit, autoRotate: true)
         else { return }
         operation.jobTitle = url.deletingPathExtension().lastPathComponent

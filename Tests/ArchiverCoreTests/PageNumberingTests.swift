@@ -118,7 +118,7 @@ struct PageNumberingTests {
         let pdf = try #require(PDFDocument(url: result.url))
         #expect(pdf.pageCount == 3)
         #expect(pdf.page(at: 0)?.string?.contains("Erstens") == true)
-        #expect(pdf.page(at: 0)?.string?.contains("Nr. 000001") == true)
+        #expect(pdf.page(at: 0)?.string?.contains("Nr. 000001") != true)  // Stempel nur zur Laufzeit
         #expect(pdf.page(at: 1)?.string?.contains("Zweitens") == true)
         #expect(pdf.page(at: 2)?.string?.contains("Drittens") == true)
         #expect(result.meta.pageOrder == [0, 2, 1])

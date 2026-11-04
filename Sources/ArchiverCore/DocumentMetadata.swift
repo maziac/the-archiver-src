@@ -26,7 +26,7 @@ public struct DocumentMetadata: Codable, Equatable, Sendable {
 
     /// Wie die Datei im Archiv entstanden ist.
     public enum Storage: String, Codable, Sendable {
-        /// Original unverändert, Stempel/Textebene/Metadaten per inkrementellem Update angehängt
+        /// Original unverändert, Textebene/Metadaten per inkrementellem Update angehängt
         case appended
         /// Original von PDFKit neu geschrieben (war kleiner als das Anhängen)
         case rewritten

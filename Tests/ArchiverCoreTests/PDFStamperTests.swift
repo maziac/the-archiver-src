@@ -55,14 +55,14 @@ struct PDFStamperTests {
         #expect(PDFStamper.pageTexts(of: makeImagePDF()) == [""])
     }
 
-    @Test func textPDFKeepsContentAndGetsStamp() throws {
+    @Test func textPDFKeepsContentWithoutStamp() throws {
         let source = makeTextPDF()
         let data = try PDFStamper.stamp(source: source, pages: [.init(index: 0), .init(index: 1)], number: 42, date: date,
                                         title: "Telekom Rechnung", summary: "Mobilfunk")
         let pdf = try #require(PDFDocument(data: data))
         #expect(pdf.pageCount == 2)
         #expect(pdf.page(at: 0)?.string?.contains("Online-Rechnung Telekom") == true)
-        #expect(pdf.page(at: 0)?.string?.contains("Nr. 000042") == true)
+        #expect(pdf.page(at: 0)?.string?.contains("Nr. 000042") == false)
         #expect(pdf.page(at: 1)?.string?.contains("000042") == false)
         #expect(pdf.page(at: 0)?.annotations.contains { $0.url?.absoluteString == "https://example.com" } == true)
         let attrs = pdf.documentAttributes ?? [:]
@@ -75,7 +75,7 @@ struct PDFStamperTests {
         let pdf = try #require(PDFDocument(data: data))
         #expect(pdf.pageCount == 1)
         #expect(pdf.page(at: 0)?.string?.contains("Einzelverbindungsnachweis") == true)
-        #expect(pdf.page(at: 0)?.string?.contains("Nr. 000001") == true)
+        #expect(pdf.page(at: 0)?.string?.contains("Nr. 000001") == false)
     }
 
     /// OCR auf der gerenderten Seite, Textebene zurück ins Original – für 0°, 90°, 180° und 270°.
@@ -96,19 +96,18 @@ struct PDFStamperTests {
         #expect(page.rotation == 0)
         let text = page.string ?? ""
         #expect(text.contains("Mahnung Finanzamt"))
-        // Text liegt oben links, der Stempel oben rechts (im unveränderten Seitenraum, da Drehung wieder 0)
+        // Text liegt oben links (im unveränderten Seitenraum, da Drehung wieder 0); kein Stempel gespeichert
         let selection = try #require(pdf.findString("Mahnung", withOptions: []).first)
         let bounds = selection.bounds(for: page)
         #expect(bounds.minX < 150 && bounds.minY > 550, "Mahnung bei \(bounds)")
-        let stamp = try #require(pdf.findString("Nr. 000007", withOptions: []).first).bounds(for: page)
-        #expect(stamp.minX > 400 && stamp.minY > 780, "Stempel bei \(stamp)")
+        #expect(pdf.findString("Nr. 000007", withOptions: []).isEmpty)
     }
 
     @Test func originalImageResolutionIsKept() throws {
         let source = makeImagePDF()
         let before = try Data(contentsOf: source).count
         let data = try PDFStamper.stamp(source: source, pages: [.init(index: 0)], number: 1, date: date, title: "", summary: "")
-        // gleiche Bilddaten, nur Stempel/Metadaten dazu
+        // gleiche Bilddaten, nur Metadaten dazu
         #expect(abs(data.count - before) < 20_000, "vorher \(before), nachher \(data.count)")
     }
 }

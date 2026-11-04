@@ -3,7 +3,7 @@ import ArchiverCore
 import SwiftUI
 
 /// „Seiten bearbeiten“ für ein archiviertes Dokument: Reihenfolge per Ziehen, Drehen per Klick.
-/// Gespeichert wird inkrementell (`Archive.rearrange`); der Stempel wandert auf die neue erste Seite.
+/// Gespeichert wird inkrementell (`Archive.rearrange`); die Nummer erscheint auf der neuen ersten Seite.
 struct PageEditorSheet: View {
     let record: DocumentRecord
     /// nach erfolgreichem Speichern (z. B. Vorschau neu laden)
@@ -40,7 +40,7 @@ struct PageEditorSheet: View {
         VStack(spacing: 0) {
             VStack(alignment: .leading, spacing: 4) {
                 Text("Seiten bearbeiten – Nr. \(Archive.formatNumber(record.number))").font(.headline)
-                Text("Ziehen ändert die Reihenfolge · Klick dreht um 180° · Rechtsklick dreht um 90°. Der Stempel kommt immer auf die erste Seite.")
+                Text("Ziehen ändert die Reihenfolge · Klick dreht um 180° · Rechtsklick dreht um 90°. Die Nummer erscheint immer auf der ersten Seite.")
                     .font(.callout)
                     .foregroundStyle(.secondary)
                 if let issue = record.issues.first(where: \.isPageOrder) {

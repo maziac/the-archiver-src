@@ -53,7 +53,7 @@ struct Candidate {
 }
 
 /// Verarbeitet eine Datei vollautomatisch: Duplikatprüfung, Text (eingebettet oder per OCR), Vorschlag für
-/// Titel, Beschreibung und Datum, Stempel, Metadaten, Archivieren, Indexieren. Es entstehen mehrere Fassungen
+/// Titel, Beschreibung und Datum, Metadaten, Archivieren, Indexieren. Es entstehen mehrere Fassungen
 /// (angehängt, neu geschrieben, komprimiert); die kleinste gültige gewinnt.
 /// Probleme werden im Dokument vermerkt, das Dokument wird trotzdem archiviert.
 public enum ImportProcessor {
@@ -66,14 +66,13 @@ public enum ImportProcessor {
     }
 
     /// Prüft eine erzeugte Fassung: Seitenzahl, Text auf allen Seiten, die Text haben sollen,
-    /// Stempel (Nummer) und Metadaten müssen lesbar sein.
+    /// Metadaten (mit Nummer) müssen lesbar sein.
     /// - Parameter expectedTexts: nach dem Umsortieren der erwartete Text je Seite – jede Seite muss
     ///   typische Wörter davon enthalten, damit eine falsch sortierte Fassung nie gewinnt.
     static func validate(_ data: Data, number: Int, pageCount: Int, textPages: Set<Int>,
                          expectedTexts: [String]? = nil) -> Bool {
         guard let pdf = PDFDocument(data: data), pdf.pageCount == pageCount,
-              PDFMetadata.read(pdf)?.number == number,
-              !pdf.findString("Nr. \(Archive.formatNumber(number))", withOptions: []).isEmpty else { return false }
+              PDFMetadata.read(pdf)?.number == number else { return false }
         guard textPages.allSatisfy({ DocumentIssue.hasText(pdf.page(at: $0)?.string ?? "") }) else { return false }
         guard let expectedTexts else { return true }
         return pagesMatch(pdf, expectedTexts: expectedTexts)
@@ -167,7 +166,7 @@ public enum ImportProcessor {
                     composed.append(PDFPageInput(vectorPage: cgPage))
                 }
             }
-            // Reihenfolge laut gedruckter Seitenzahlen; eindeutig → vor dem Stempeln umsortieren
+            // Reihenfolge laut gedruckter Seitenzahlen; eindeutig → vor dem Speichern umsortieren
             let numbering = PageNumbering.analyze(pageTexts: pageTexts)
             if case let .reorder(order) = numbering {
                 pageOrder = order
@@ -191,7 +190,7 @@ public enum ImportProcessor {
             makeCandidates = { number, date, title, summary, meta in
                 var candidates: [Candidate] = []
                 // 1. Original unverändert, Zusätze angehängt (inkrementelles Update)
-                if let appended = try? PDFAppender.stamp(original: fileData, stampText: PDFBuilder.stampText(number: number, date: date),
+                if let appended = try? PDFAppender.stamp(original: fileData,
                                                          overlays: overlays, meta: meta(.appended, false), title: title, summary: summary,
                                                          order: order) {
                     candidates.append(Candidate(storage: .appended, data: appended))
@@ -304,7 +303,7 @@ public enum ImportProcessor {
                     }
                     return m
                 }
-                // Die kleinste Fassung gewinnt – aber nur, wenn Text, Stempel und Metadaten lesbar sind
+                // Die kleinste Fassung gewinnt – aber nur, wenn Text und Metadaten lesbar sind
                 let candidates = try makeCandidates(number, date, title, summary, metaFor)
                 let valid = candidates.filter {
                     validate($0.data, number: number, pageCount: pageCount, textPages: expectedTextPages,

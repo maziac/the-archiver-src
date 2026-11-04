@@ -43,7 +43,7 @@ struct ImagesToPDFTests {
         #expect(ImagesToPDF.fileName(for: [images[0]]) == "Seite 1.pdf")
     }
 
-    /// Verbundenes PDF durchläuft den normalen Import: OCR beider Seiten, Stempel, Metadaten.
+    /// Verbundenes PDF durchläuft den normalen Import: OCR beider Seiten, Metadaten.
     @Test func combinedPDFImportsAsOneDocument() async throws {
         let images = try makeImages()
         let combined = folder.appendingPathComponent(ImagesToPDF.fileName(for: images))
@@ -58,6 +58,6 @@ struct ImagesToPDFTests {
         #expect(result.meta.pages == [.ocr, .ocr])
         #expect(pdf.page(at: 0)?.string?.contains("Mietvertrag") == true)
         #expect(pdf.page(at: 1)?.string?.contains("Unterschriften") == true)
-        #expect(pdf.page(at: 0)?.string?.contains("Nr. 000001") == true)
+        #expect(PDFMetadata.read(pdf)?.number == 1)
     }
 }

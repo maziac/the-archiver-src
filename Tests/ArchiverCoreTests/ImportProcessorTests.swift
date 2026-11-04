@@ -71,7 +71,7 @@ struct ImportProcessorTests {
         let pdf = try #require(PDFDocument(url: result.url))
         #expect(pdf.pageCount == 2)
         #expect(pdf.page(at: 0)?.string?.contains("Online-Rechnung Telekom") == true)
-        #expect(pdf.page(at: 0)?.string?.contains("Nr. 000001") == true)
+        #expect(pdf.page(at: 0)?.string?.contains("Nr. 000001") != true)  // Stempel nur zur Laufzeit
         #expect(pdf.page(at: 0)?.annotations.contains { $0.url != nil } == true)  // Link erhalten
         let meta = try #require(PDFMetadata.read(pdf))
         #expect(meta.number == 1)
@@ -217,7 +217,7 @@ struct MetadataTests {
         let pdf = try #require(PDFDocument(url: saved.url))
         #expect(PDFMetadata.read(pdf) == sampleMeta(number: 1))
         #expect(pdf.documentAttributes?[PDFDocumentAttribute.subjectAttribute] as? String == "Ümläute & Sonderzeichen")
-        #expect(pdf.page(at: 0)?.string?.contains("Nr. 000001") == true)
+        #expect(pdf.page(at: 0)?.string?.contains("Nr. 000001") != true, "Stempel wird nicht gespeichert")
 
         // Bearbeiten: Datum manuell, Problem erledigt – übrige Metadaten bleiben
         let newDate = date.addingTimeInterval(-86400 * 10)
@@ -276,11 +276,11 @@ struct MetadataTests {
             Dictionary(uniqueKeysWithValues: DocumentInfo.lines(meta: meta, fileSize: size, pageCount: 1).map { ($0.label, $0.value) })
         }
         #expect(lines(71_257)["Originaldatei"] == "TK-Ausweis.pdf (67 KB)")
-        #expect(lines(71_257)["Dateigröße"] == "71 KB (Original 67 KB, +5 KB: Stempel, OCR-Textebene, Metadaten angehängt)")
+        #expect(lines(71_257)["Dateigröße"] == "71 KB (Original 67 KB, +5 KB: OCR-Textebene, Metadaten angehängt)")
         #expect(lines(71_257)["Speicherung"] == "Original unverändert, Zusätze angehängt")
         // Textseiten: keine OCR-Ebene erwähnen
         meta.pages = [.embedded]
-        #expect(lines(68_300)["Dateigröße"] == "68 KB (Original 67 KB, +2 KB: Stempel, Metadaten angehängt)")
+        #expect(lines(68_300)["Dateigröße"] == "68 KB (Original 67 KB, +2 KB: Metadaten angehängt)")
         meta.storage = .rebuilt
         meta.originalSize = 1_926_408
         #expect(lines(178_148)["Dateigröße"]?.hasSuffix("−1,7 MB durch Kompression)") == true, "\(lines(178_148)["Dateigröße"] ?? "")")
@@ -313,11 +313,12 @@ struct MetadataTests {
     }
 
     @Test func legacyMigration() throws {
-        // PDF wie aus früherer Version: ohne Archiver-Metadaten, Probleme in Zusatzdatei
+        // PDF wie aus früherer Version: ohne Archiver-Metadaten, mit eingebranntem Stempel, Probleme in Zusatzdatei
         let archive = try Archive(folder: folder)
         let saved = try archive.save(date: date, title: "Alt") { number in
-            try PDFBuilder.build(pages: [PDFPageInput(image: PDFBuilderTests.renderPage("Alter Brief"), lines: [])],
-                                 number: number, date: date, dpi: 150, title: "Alter Brief", summary: "von früher")
+            let data = try PDFBuilder.build(pages: [PDFPageInput(image: PDFBuilderTests.renderPage("Alter Brief"), lines: [])],
+                                            number: number, date: date, dpi: 150, title: "Alter Brief", summary: "von früher")
+            return try PDFAppender.addStamp(data, stampText: PDFBuilder.stampText(number: number, date: date))
         }
         try JSONEncoder().encode(["1": [DocumentIssue.noDate]]).write(to: folder.appendingPathComponent(LegacyIssues.fileName))
         #expect(PDFMetadata.read(url: saved.url) == nil)

@@ -11,7 +11,7 @@ lesbar ist.
 - **Das PDF ist der Master.** Nummer, Datum, Titel, Beschreibung, Herkunft, Probleme und Seiten-Infos
   stehen *im* PDF (versteckte Anmerkung `/Archiver` auf Seite 1 plus Dokumentinfos). Der Suchindex
   ist nur ein Cache und lässt sich jederzeit aus den PDFs neu aufbauen.
-- **Originale bleiben, wo möglich, bitgenau erhalten.** Bei importierten PDFs werden Stempel, OCR-Text,
+- **Originale bleiben, wo möglich, bitgenau erhalten.** Bei importierten PDFs werden OCR-Text,
   Metadaten, Umsortierungen und Drehungen per **inkrementellem Update** angehängt (`PDFAppender`).
 - **Zwei Schichten:** `ArchiverCore` (Bibliothek, ohne UI, vollständig getestet) und `Archiver`
   (SwiftUI-App: Oberfläche, Scanner, Eingangsordner).
@@ -177,9 +177,10 @@ flowchart TB
 | `OCRService` | Vision-Texterkennung (de/en) auf eigener serieller Queue; Ausrichtung per schneller OCR in vier Richtungen |
 | `Summarizer` | Apple Intelligence (lokal): Titel, Beschreibung, Datum, Absender und Kategorien aus den ersten zwei Seiten |
 | `Categories` | Kategorien als Pfade („Absender/DAK“): Startliste, Normalisieren an vorhandene, Oberkategorien, Umbenennen |
-| `PDFBuilder` | Neues PDF aus Seitenbildern mit unsichtbarer Textebene und rotem Stempel (Scans, Bilder, komprimierte Fassung) |
+| `PDFBuilder` | Neues PDF aus Seitenbildern mit unsichtbarer Textebene (Scans, Bilder, komprimierte Fassung); Stempelgeometrie |
 | `PDFStamper` | Vorhandenes PDF über PDFKit neu schreiben (Alternative, falls kleiner) |
-| `PDFAppender` | Stempel, Textebene, Metadaten, neue Reihenfolge und Drehung **anhängen**; Original bleibt bitgenau |
+| `PDFAppender` | Textebene, Metadaten, neue Reihenfolge und Drehung **anhängen** (Stempel nur für Kopien); Original bleibt bitgenau |
+| `DocumentStamp` | Roter Stempel zur Laufzeit aus den Metadaten: Vorschau/Druck (`StampPage`), Kopie mit/ohne Nummer |
 | `PDFRaw` | Eigener PDF-Parser (Querverweistabellen und -Streams, Objekt-Streams) und Writer für inkrementelle Updates |
 | `Archive` | Ordner mit fortlaufender Nummer; Speichern, Umbenennen, Metadaten ändern, Seiten umsortieren, Altbestand migrieren |
 | `SearchIndex` | Volltextsuche (Wortanfänge, alle Wörter UND), Tag-Filter, Kategorienfilter und -zahlen, Problemfilter, Duplikaterkennung per SHA-256, Neuaufbau aus den PDFs |
@@ -193,7 +194,6 @@ flowchart TB
 flowchart LR
     subgraph PDFDatei["Archiv-PDF (Master)"]
         Inhalt["Seiteninhalt<br/>+ unsichtbare OCR-Textebene"]
-        Stempel["roter Stempel<br/>Nr. 000123 · TT.MM.JJJJ"]
         Anm["versteckte Anmerkung /Archiver<br/>JSON: DocumentMetadata"]
         Info["Dokumentinfos<br/>Titel · Betreff · Stichwörter"]
     end
@@ -205,7 +205,8 @@ flowchart LR
     Anm -- "sync / Neuaufbau" --> Index
     Inhalt -- "Text je Seite" --> Index
     Tags -- "Filter (UND)" --> Index
-    Counter -. "max(Zähler, höchste Datei-Nr.) + 1" .-> Stempel
+    Counter -. "max(Zähler, höchste Datei-Nr.) + 1" .-> Anm
+    Anm -. "Nummer + Dokumentdatum" .-> Stempel["roter Stempel (nur Laufzeit)<br/>Vorschau · Druck · Kopie mit Nummer"]
 ```
 
 `DocumentMetadata` enthält u. a.: Nummer, Dokumentdatum und dessen Herkunft, Titel-Herkunft, Archivierungszeit,
@@ -292,7 +293,7 @@ sequenceDiagram
             S->>C: komprimieren (Größe/Farbe aus Einstellungen)
         end
         S->>A: save(date, title) { Nummer → PDF }
-        A->>B: build(Seiten, Nummer, Datum) + Stempel + Textebene
+        A->>B: build(Seiten, Nummer, Datum) + Textebene
         B-->>A: PDF-Daten
         A->>A: PDFMetadata.finalize (Metadaten ins PDF)
         A-->>S: Nummer, Datei-URL
@@ -360,7 +361,7 @@ flowchart TD
     C --> C1["angehängt (PDFAppender)<br/>Original bitgenau"]
     C --> C2["neu geschrieben (PDFStamper)"]
     C --> C3["neu erzeugt + komprimiert (PDFBuilder)<br/>nur wenn Bildseiten und Kompression an"]
-    C1 & C2 & C3 --> VAL["prüfen: Seitenzahl, Text, Stempel,<br/>Metadaten, Reihenfolge"]
+    C1 & C2 & C3 --> VAL["prüfen: Seitenzahl, Text,<br/>Metadaten, Reihenfolge"]
     VAL --> MIN["kleinste gültige Fassung speichern<br/>(Speicherart in den Metadaten)"]
     MIN --> IDX["SearchIndex.add"]
 ```
@@ -415,8 +416,8 @@ flowchart TD
     C -- "ziehen / drehen /<br/>„Wie im Original“" --> B
     C -- "Sichern ohne Änderung" --> D["Reihenfolge bestätigt:<br/>nur Hinweis entfernen"]
     C -- "Sichern mit Änderung" --> E["Archive.rearrange"]
-    E --> F["PDFAppender.rearrange (anhängen)<br/>• neuer flacher Seitenbaum<br/>• Rotate je Seite<br/>• alter Stempel weiß überdeckt<br/>• Stempel + Metadaten auf neuer Seite 1"]
-    F --> G{"Prüfung: Seitenzahl, Stempel,<br/>Metadaten, Text je Seite"}
+    E --> F["PDFAppender.rearrange (anhängen)<br/>• neuer flacher Seitenbaum<br/>• Rotate je Seite<br/>• Metadaten auf neuer Seite 1"]
+    F --> G{"Prüfung: Seitenzahl,<br/>Metadaten, Text je Seite"}
     G -- fehlgeschlagen --> H[/"Fehlermeldung, Datei unverändert"/]
     G -- ok --> I["Datei ersetzen · Index-Text erneuern<br/>Vorschau neu laden"]
 ```

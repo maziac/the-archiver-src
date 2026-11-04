@@ -78,7 +78,7 @@ struct ArchiveTests {
         #expect(attrs[PDFDocumentAttribute.subjectAttribute] as? String == "Rechnung über Strom.")
         #expect((attrs[PDFDocumentAttribute.keywordsAttribute] as? [String])?.contains("000001") == true)
         #expect(pdf.string?.contains("Stromrechnung") == true)
-        #expect(pdf.string?.contains("Nr. 000001") == true)
+        #expect(pdf.string?.contains("Nr. 000001") != true)  // Stempel nur zur Laufzeit
         let sizeAfter = try Data(contentsOf: newURL).count
         #expect(sizeAfter < sizeBefore * 2, "vorher \(sizeBefore), nachher \(sizeAfter)")
     }

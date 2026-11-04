@@ -218,7 +218,6 @@ public final class Archive: @unchecked Sendable {
             throw ArchiveError.cannotRearrange(url, "ungültige Seitenreihenfolge")
         }
         let oldTexts = (0..<count).map { pdf.page(at: $0)?.string ?? "" }
-        let stampText = Archive.stampText(in: oldTexts[0]) ?? PDFBuilder.stampText(number: meta.number, date: meta.documentDate)
 
         let identity = Array(0..<count)
         let combined = order.map { meta.pageOrder?[$0] ?? $0 }
@@ -235,15 +234,14 @@ public final class Archive: @unchecked Sendable {
 
         let result: Data
         do {
-            result = try PDFAppender.rearrange(data, order: order, rotations: rotations, stampText: stampText,
+            result = try PDFAppender.rearrange(data, order: order, rotations: rotations,
                                                meta: meta, title: title, summary: summary)
         } catch {
             throw ArchiveError.cannotRearrange(url, error.localizedDescription)
         }
-        // Prüfen: Seitenzahl, Stempel vorn, Metadaten, Text je Seite in neuer Reihenfolge
+        // Prüfen: Seitenzahl, Metadaten, Text je Seite in neuer Reihenfolge
         guard let check = PDFDocument(data: result), check.pageCount == count,
               PDFMetadata.read(check) == meta,
-              check.page(at: 0)?.string?.contains(stampText) == true,
               ImportProcessor.pagesMatch(check, expectedTexts: order.map { oldTexts[$0] }) else {
             throw ArchiveError.cannotRearrange(url, "das Ergebnis ließ sich nicht prüfen")
         }
@@ -275,11 +273,6 @@ public final class Archive: @unchecked Sendable {
         }
     }
 
-    /// Stempeltext („Nr. 000123 · 19.09.2026“) aus dem Text einer Seite.
-    static func stampText(in pageText: String) -> String? {
-        guard let range = pageText.range(of: #"Nr\. \d+ · \d{2}\.\d{2}\.\d{4}"#, options: .regularExpression) else { return nil }
-        return String(pageText[range])
-    }
 
     /// Metadaten speichern: bevorzugt **angehängt** (inkrementelles Update, Original bleibt bitgenau),
     /// nur wenn das scheitert oder nicht lesbar ist, durch PDFKit neu geschrieben.

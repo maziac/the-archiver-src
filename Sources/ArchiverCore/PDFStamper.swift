@@ -5,7 +5,6 @@ import PDFKit
 
 /// Übernimmt ein vorhandenes PDF inhaltlich unverändert (Text, Bilder in Originalauflösung,
 /// Links, Lesezeichen) und ergänzt nur:
-/// - den roten Nummernstempel auf Seite 1,
 /// - eine unsichtbare OCR-Textebene für Seiten, die bisher nur ein Bild enthalten,
 /// - Metadaten (Titel, Beschreibung, Nummer).
 public enum PDFStamper {
@@ -36,7 +35,7 @@ public enum PDFStamper {
 
     public static func stamp(source: URL, pages: [PageEdit], number: Int, date: Date,
                              title: String, summary: String, meta: DocumentMetadata? = nil) throws -> Data {
-        // Stempel-Seitentyp nur für Seite 1 und Seiten mit OCR-Ebene; alle anderen bleiben normale Seiten
+        // Seitentyp mit Zusatzzeichnung nur für Seiten mit OCR-Ebene; alle anderen bleiben normale Seiten
         let delegate = StampDelegate()
         guard let pdf = PDFDocument(url: source), let stampSource = PDFDocument(url: source) else {
             throw ArchiveError.unreadablePDF(source)
@@ -44,19 +43,15 @@ public enum PDFStamper {
         stampSource.delegate = delegate
 
         // gewünschte Seiten in gewünschter Reihenfolge; entfernte Seiten fallen weg
-        let kept = pages.enumerated().compactMap { position, edit -> (PDFPage, PageEdit)? in
-            let needsOverlay = position == 0 || !edit.lines.isEmpty
-            guard let page = (needsOverlay ? stampSource : pdf).page(at: edit.index) else { return nil }
+        let kept = pages.compactMap { edit -> (PDFPage, PageEdit)? in
+            guard let page = (edit.lines.isEmpty ? pdf : stampSource).page(at: edit.index) else { return nil }
             return (page, edit)
         }
         guard !kept.isEmpty else { throw ArchiveError.unreadablePDF(source) }
         for i in stride(from: pdf.pageCount - 1, through: 0, by: -1) { pdf.removePage(at: i) }
         for (position, (page, edit)) in kept.enumerated() {
             page.rotation = ((page.rotation + edit.extraRotation) % 360 + 360) % 360
-            if let stampPage = page as? StampPage {
-                stampPage.overlayLines = edit.lines
-                stampPage.stampText = position == 0 ? PDFBuilder.stampText(number: number, date: date) : nil
-            }
+            (page as? StampPage)?.overlayLines = edit.lines
             pdf.insert(page, at: position)
         }
 
@@ -92,14 +87,37 @@ public enum PDFStamper {
     }
 }
 
-private final class StampDelegate: NSObject, PDFDocumentDelegate {
+final class StampDelegate: NSObject, PDFDocumentDelegate {
     func classForPage() -> AnyClass { StampPage.self }
 }
 
-/// Seite, die beim Anzeigen und Speichern zusätzlich Stempel und OCR-Textebene zeichnet.
+/// Seite, die beim Anzeigen, Drucken und Speichern zusätzlich Stempel und/oder OCR-Textebene zeichnet.
+/// PDFKit legt die Seiten über einen eigenen Initialisierer an, Swift-Eigenschaften mit Startwert werden dabei
+/// nicht initialisiert (der Speicher ist nur genullt). Deshalb liegt alles in einer optionalen Objektreferenz –
+/// genullt bedeutet sicher `nil`.
 final class StampPage: PDFPage {
-    var overlayLines: [OCRLine] = []
-    var stampText: String?
+    private final class Extras {
+        var overlayLines: [OCRLine] = []
+        var stampText: String?
+    }
+    private var extras: Extras?
+
+    private var ensuredExtras: Extras {
+        if let extras { return extras }
+        let created = Extras()
+        extras = created
+        return created
+    }
+
+    var overlayLines: [OCRLine] {
+        get { extras?.overlayLines ?? [] }
+        set { ensuredExtras.overlayLines = newValue }
+    }
+
+    var stampText: String? {
+        get { extras?.stampText }
+        set { ensuredExtras.stampText = newValue }
+    }
 
     override func draw(with box: PDFDisplayBox, to context: CGContext) {
         super.draw(with: box, to: context)

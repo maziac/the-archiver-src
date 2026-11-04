@@ -38,11 +38,14 @@ FoundationModels **weak-linked**), `Archiver` (SwiftUI-App, Scanner, Eingangsord
   Anmerkung `/Archiver` auf Seite 1. PDFKit verwirft eigene Info-Schlüssel — deshalb die Anmerkung.
   Der SQLite-Index ist ein Cache und muss sich per `SearchIndex.sync(full: true)` vollständig aus den
   PDFs neu aufbauen lassen. Jede neue Metadaten-Information muss also im PDF landen.
-- **Importierte PDFs bleiben bitgenau.** Ergänzungen (Stempel, OCR-Ebene, Metadaten, Umsortierung,
+- **Importierte PDFs bleiben bitgenau.** Ergänzungen (OCR-Ebene, Metadaten, Umsortierung,
   Drehung) hängt `PDFAppender` als inkrementelles Update an; das Original bleibt Präfix der Datei.
   Beim Import konkurrieren drei Fassungen (`appended`, `rewritten` via PDFKit, `rebuilt` komprimiert);
   jede wird validiert (`ImportProcessor.validate`), die kleinste gültige gewinnt und steht als
   `DocumentMetadata.storage` im PDF.
+- **Der rote Nummernstempel steht nie in der Archivdatei.** `DocumentStamp` zeichnet ihn zur Laufzeit aus
+  den Metadaten (Nummer + `documentDate`): Vorschau/Druck über `StampPage` (PDFDocument-Delegate),
+  „Kopieren“ über `PDFAppender.addStamp` an einer Kopie. „Ohne Nummer“ = Archivdatei unverändert.
 - **Nummern werden nie wiederverwendet:** `max(counter.json, höchste Nummer im Ordner) + 1`.
 - Schreiben immer atomar (temporäre Datei + `replaceItemAt`), Ergebnis vorher prüfen.
 
@@ -57,7 +60,7 @@ FoundationModels **weak-linked**), `Archiver` (SwiftUI-App, Scanner, Eingangsord
   PNG-Prädiktor, Objekt-Streams, Seitenbaum). Kein Fremdcode, keine Abhängigkeiten.
 - `PDFBuilder` (+ `ImageTools`), `PDFStamper`, `GlyphlessFont`, `PageCompressor` – PDF erzeugen,
   unsichtbare OCR-Textebene, Stempelgeometrie (`PDFBuilder.stampGeometry` ist **die** gemeinsame
-  Quelle für alle Wege), Kompression.
+  Quelle für Anzeige und Kopie), Kompression. `DocumentStamp` – Stempel zur Laufzeit, Kopie mit/ohne Nummer.
 - `SearchIndex` – SQLite FTS5 (+ `fts5vocab` für führende Platzhalter), Suche, Tag-Filter,
   Problemfilter, Duplikate, Neuaufbau.
 - `Categories` – Kategorien als Pfade (`Absender/DAK`) in `DocumentMetadata.categories` (nil = noch nicht
@@ -93,6 +96,10 @@ Schlüssel hochzählen, damit Bestandsdokumente erneut geprüft werden.
 - **Datumscodierung** in `DocumentMetadata` ist `.deferredToDate`; JSON ASCII-only, sonst brechen
   Roundtrip-Vergleiche (`PDFMetadata.read(pdf) == meta`).
 - Swift-Regex-Literale können kein Lookbehind → `NSRegularExpression` (siehe `DateExtractor`).
+- **`StampPage` (PDFPage-Unterklasse)** wird von PDFKit über einen eigenen Initialisierer angelegt;
+  Swift-Eigenschaften mit Startwert bleiben dabei uninitialisiert (genullt) → Absturz. Deshalb nur eine
+  optionale Objektreferenz als Speicher. Eine `PDFPage` hält ihr Dokument nur schwach – beim Zeichnen das
+  Dokument am Leben halten. `thumbnail(of:for:)` ruft das überschriebene `draw` nicht auf.
 - `Data.write` erlaubt nicht `.atomic` zusammen mit `.withoutOverwriting`.
 - Verschachtelte `#require`/`#expect` in swift-testing können still fehlschlagen zu kompilieren; Tests
   flach halten.

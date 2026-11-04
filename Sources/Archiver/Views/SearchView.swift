@@ -246,8 +246,14 @@ struct SearchView: View {
             .disabled(ids.count != 1)
             Button("Seiten bearbeiten …") { editingPages = single }
                 .disabled(single?.meta == nil)
-            Button("Drucken …") { if let single { DocumentPrinter.print(url: single.url) } }
+            Divider()
+            Button("Kopieren") { copy(ids, withNumber: true) }
+            Button("Kopieren ohne Nummer") { copy(ids, withNumber: false) }
+            Button("Drucken …") { if let single { DocumentPrinter.print(url: single.url, withNumber: true) } }
                 .disabled(single == nil)
+            Button("Drucken ohne Nummer …") { if let single { DocumentPrinter.print(url: single.url, withNumber: false) } }
+                .disabled(single == nil)
+            Divider()
             Button("Im Finder zeigen") {
                 NSWorkspace.shared.activateFileViewerSelecting(ids.map { URL(fileURLWithPath: $0) })
             }
@@ -265,6 +271,16 @@ struct SearchView: View {
             }
         } primaryAction: { ids in
             open(ids)  // Doppelklick
+        }
+        .onCopyCommand {  // ⌘C bzw. Bearbeiten → Kopieren: wie „Kopieren“ im Kontextmenü
+            let urls = results.filter { selection.contains($0.id) }.map(\.url)
+            guard !urls.isEmpty else { return [] }
+            do {
+                return try DocumentClipboard.makeCopies(urls, withNumber: true).map { NSItemProvider(object: $0 as NSURL) }
+            } catch {
+                self.error = error.localizedDescription
+                return []
+            }
         }
         .onDeleteCommand {  // Entf-Taste bzw. Bearbeiten → Löschen
             pendingDelete = results.filter { selection.contains($0.id) }
@@ -504,6 +520,13 @@ struct SearchView: View {
         return parts.joined(separator: "\n\n")
     }
 
+    /// Dokumente als Dateien in die Zwischenablage legen (Einsetzen z. B. im Finder).
+    private func copy(_ ids: Set<DocumentRecord.ID>, withNumber: Bool) {
+        let urls = results.filter { ids.contains($0.id) }.map(\.url)
+        guard !urls.isEmpty else { return }
+        do { try DocumentClipboard.copy(urls, withNumber: withNumber) } catch { self.error = error.localizedDescription }
+    }
+
     private func open(_ ids: Set<DocumentRecord.ID>) {
         for id in ids { NSWorkspace.shared.open(URL(fileURLWithPath: id)) }
     }
@@ -648,7 +671,7 @@ private struct EditDocumentSheet: View {
             if let message {
                 Text(message).font(.caption).foregroundStyle(.orange)
             }
-            Text("Die Datei wird passend zu Datum und Titel umbenannt. Der Stempel auf Seite 1 bleibt unverändert.")
+            Text("Die Datei wird passend zu Datum und Titel umbenannt. Nummer und Datum im Stempel auf Seite 1 folgen diesen Angaben.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
             HStack {
