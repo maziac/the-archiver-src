@@ -19,13 +19,18 @@ final class PDFPreviewModel {
     private(set) var document: PDFDocument?
     /// Archiver-Metadaten des angezeigten Dokuments
     private(set) var meta: DocumentMetadata?
+    /// Titel und Beschreibung des angezeigten Dokuments (stehen ohne Suche im Fundstellen-Feld)
+    private(set) var title = ""
+    private(set) var summary = ""
     var query = "" { didSet { if query != oldValue { search() } } }
     private(set) var hits: [Hit] = []
     var currentHit: Int? { didSet { if currentHit != oldValue { navigationToken += 1 } } }
     /// ändert sich bei jedem Sprung, damit die PDF-Ansicht auch zum selben Treffer erneut scrollt
     private(set) var navigationToken = 0
 
-    func show(url: URL?, query: String) {
+    func show(url: URL?, query: String, title: String = "", summary: String = "") {
+        self.title = title
+        self.summary = summary
         if url != self.url {
             self.url = url
             document = url.flatMap { DocumentStamp.document(url: $0) }  // mit Nummernstempel
@@ -43,7 +48,7 @@ final class PDFPreviewModel {
         guard let url else { return }
         let current = query
         self.url = nil
-        show(url: url, query: current)
+        show(url: url, query: current, title: title, summary: summary)
     }
 
     /// Findet alle Suchwörter (wie im Archiv: Umlaute/Groß-Klein egal, Wortanfänge genügen).
@@ -192,9 +197,23 @@ struct PDFPreviewPane: View {
             .listStyle(.plain)
             .overlay {
                 if preview.hits.isEmpty {
-                    Text(preview.query.isEmpty ? "Suchbegriff eingeben, um Fundstellen aufzulisten" : "Keine Fundstellen")
-                        .font(.callout)
-                        .foregroundStyle(.tertiary)
+                    if preview.query.isEmpty && !(preview.title.isEmpty && preview.summary.isEmpty) {
+                        // ohne Suche: Titel und Beschreibung des Dokuments
+                        ScrollView {
+                            VStack(alignment: .leading, spacing: 4) {
+                                if !preview.title.isEmpty { Text(preview.title).font(.headline) }
+                                if !preview.summary.isEmpty { Text(preview.summary) }
+                            }
+                            .textSelection(.enabled)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(10)
+                        }
+                        .background(.background)
+                    } else {
+                        Text(preview.query.isEmpty ? "Suchbegriff eingeben, um Fundstellen aufzulisten" : "Keine Fundstellen")
+                            .font(.callout)
+                            .foregroundStyle(.tertiary)
+                    }
                 }
             }
             .onChange(of: preview.currentHit) { _, current in

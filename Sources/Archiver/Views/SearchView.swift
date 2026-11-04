@@ -500,7 +500,8 @@ struct SearchView: View {
     /// Erstes ausgewähltes Dokument (in Listenreihenfolge) in der Vorschau zeigen.
     private func updatePreview() {
         let shown = results.first { selection.contains($0.id) }
-        preview.show(url: shown?.url, query: query)
+        preview.show(url: shown?.url, query: query,
+                     title: shown?.title ?? "", summary: shown?.summary ?? "")
     }
 
     private var deleteQuestion: String {
