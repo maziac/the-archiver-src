@@ -51,7 +51,7 @@ flowchart TB
     end
 
     subgraph FILES["Dateisystem"]
-        ArchiveDir[("Archivordner<br/>JJJJ-MM-TT_NNNNNN_Titel.pdf<br/>counter.json<br/>.archiver-index.sqlite<br/>.archiver-tags.json")]
+        ArchiveDir[("Archivordner<br/>JJJJ-MM-TT-NNNNNNN-Titel.pdf<br/>counter.json<br/>.archiver-index.sqlite<br/>.archiver-tags.json")]
         InboxDir[("Eingangsordner<br/>+ Fehler/ + Duplikate/")]
     end
 
@@ -401,7 +401,7 @@ flowchart LR
     C --> D{"PDFAppender.updateMetadata<br/>(anhängen) klappt?"}
     D -- ja --> E["Metadaten + Dokumentinfos angehängt"]
     D -- nein --> E2["Fallback: PDFKit schreibt neu"]
-    E & E2 --> F["Datei umbenennen<br/>JJJJ-MM-TT_NNNNNN_Titel.pdf"]
+    E & E2 --> F["Datei umbenennen<br/>JJJJ-MM-TT-NNNNNNN-Titel.pdf"]
     F --> G["SearchIndex.update"]
     G --> H["erledigte Probleme entfernt<br/>(Titel gesetzt, Datum bestätigt)"]
 ```

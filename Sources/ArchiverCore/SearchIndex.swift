@@ -166,7 +166,7 @@ public final class SearchIndex: @unchecked Sendable {
         var title = attributes[PDFDocumentAttribute.titleAttribute] as? String ?? ""
         var summary = attributes[PDFDocumentAttribute.subjectAttribute] as? String ?? ""
         // Platzhalter (Dateistamm als Titel, Stempeltext als Betreff) gelten als leer.
-        if title.wholeMatch(of: #/\d{4}-\d{2}-\d{2}_\d{6,}/#) != nil { title = "" }
+        if Archive.isFileStem(title) { title = "" }
         if summary.hasPrefix("Nr. ") { summary = "" }
         try add(number: meta?.number ?? parsed?.number ?? 0, date: date, url: url, pages: pdf.pageCount,
                 text: pdf.string ?? "", title: title, summary: summary, meta: meta)

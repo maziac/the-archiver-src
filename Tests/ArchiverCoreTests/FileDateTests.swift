@@ -83,6 +83,6 @@ struct FileDateTests {
         #expect(Archive.formatDate(result.date) == "2025-12-11")
         #expect(result.meta.dateSource == .fileName)
         #expect(!result.issues.contains(.noDate))
-        #expect(result.url.lastPathComponent.hasPrefix("2025-12-11_"))
+        #expect(result.url.lastPathComponent.hasPrefix("2025-12-11-"))
     }
 }

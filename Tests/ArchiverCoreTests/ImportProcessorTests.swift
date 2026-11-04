@@ -188,7 +188,7 @@ struct ImportProcessorTests {
         let result = try await process(png, env, ImportOptions())
         #expect(!result.title.isEmpty)
         #expect(result.meta.titleSource == .ai)
-        #expect(result.url.lastPathComponent.hasPrefix("2026-09-18_000001_"))
+        #expect(result.url.lastPathComponent.hasPrefix("2026-09-18-0000001-"))
     }
 }
 
@@ -231,7 +231,7 @@ struct MetadataTests {
         #expect(meta.documentDate == newDate)
         #expect(meta.scan?.scanner == "Brother MFC-L2710DN")
         #expect(meta.compression?.resultBytes == 140_000)
-        #expect(updated.url.lastPathComponent == "2026-09-08_000001_Strom-SWM.pdf")
+        #expect(updated.url.lastPathComponent == "2026-09-08-0000001-Strom-SWM.pdf")
         // Erstellversion bleibt, Änderungsversion wird gesetzt
         #expect(meta.app == sampleMeta(number: 1).app)
         #expect(meta.updatedWith == DocumentMetadata.appName)

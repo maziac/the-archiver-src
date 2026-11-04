@@ -8,7 +8,7 @@ Mac-App für beidseitige Dokumente mit einem Scanner, der über den Einzug nur e
 - sortiert die Seiten in die Originalreihenfolge (V1, R1, V2, R2, …)
 - Texterkennung mit Apple Vision (Deutsch/Englisch), erzeugt ein durchsuchbares PDF
 - schlägt **Datum, Titel und Kurzbeschreibung** vor. Das Datum kommt aus dem Text, Titel und Beschreibung erzeugt Apple Intelligence lokal. Ohne gefundenes Datum gilt das heutige.
-- Dateiname `JJJJ-MM-TT_NNNNNN_Titel.pdf` mit fortlaufender, eindeutiger Nummer
+- Dateiname `JJJJ-MM-TT-NNNNNNN-Titel.pdf` mit fortlaufender, eindeutiger Nummer
 - automatischer Import vorhandener PDFs/Bilder über einen überwachten Eingangsordner oder per Drag & Drop
 - Nummer in den PDF-Metadaten (Stichwörter); in der Vorschau, beim Drucken und beim Kopieren erscheint sie als roter Stempel oben rechts auf Seite 1 (die Datei selbst bleibt ohne Stempel). Titel und Beschreibung stehen als PDF-Titel und PDF-Betreff im Dokument.
 - Archiv-Tab: Stichwortsuche in Text, Titel und Beschreibung (UND-verknüpft, Präfix, Umlaute egal) oder nach Nummer; Doppelklick öffnet das PDF
@@ -286,7 +286,7 @@ Archivordner, Eingangsordner, Scan-Auflösung und -Farbe, Rückseiten drehen, Ko
 
 | Datei | Inhalt |
 | --- | --- |
-| `JJJJ-MM-TT_NNNNNN_Titel.pdf` | die Dokumente (Titel und Beschreibung auch in den PDF-Metadaten) |
+| `JJJJ-MM-TT-NNNNNNN-Titel.pdf` | die Dokumente (Titel und Beschreibung auch in den PDF-Metadaten) |
 | `counter.json` | letzte vergebene Nummer |
 | `.archiver-tags.json` | Tags (gespeicherte Suchen) |
 | `.archiver-index.sqlite` | Suchindex (SQLite FTS5), jederzeit per „Index neu aufbauen“ wiederherstellbar |

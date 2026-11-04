@@ -57,8 +57,8 @@ grün. Frage nach, wenn eine Anforderung unklar ist, statt zu raten.
 ## 3. Dateien und Formate
 
 ### 3.1 Archivordner (Standard `~/Documents/Archiver`)
-- Dateiname: `JJJJ-MM-TT_NNNNNN_Titel.pdf` (Dokumentdatum, 6-stellige Nummer, Titel als „Slug“:
-  Umlaute erhalten, unzulässige Zeichen entfernt, Länge begrenzt; ohne Titel `JJJJ-MM-TT_NNNNNN.pdf`).
+- Dateiname: `JJJJ-MM-TT-NNNNNNN-Titel.pdf` (Dokumentdatum, 7-stellige Nummer, Trenner „-“, Titel als „Slug“:
+  Umlaute erhalten, unzulässige Zeichen entfernt, Länge begrenzt; ohne Titel `JJJJ-MM-TT-NNNNNNN.pdf`).
 - `counter.json` – letzte vergebene Nummer.
 - `.archiver-index.sqlite` – Suchindex (Cache).
 - `.archiver-tags.json` – gespeicherte Suchen (Tags), gehören zum Archiv.

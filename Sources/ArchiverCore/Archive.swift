@@ -23,7 +23,7 @@ public enum ArchiveError: LocalizedError {
 
 /// Archivordner mit fortlaufender, eindeutiger Dokumentnummer.
 ///
-/// Dateiname: `JJJJ-MM-TT_NNNNNN[_Titel].pdf`. Der Zählerstand liegt in `counter.json` im Archivordner;
+/// Dateiname: `JJJJ-MM-TT-NNNNNNN[-Titel].pdf`. Der Zählerstand liegt in `counter.json` im Archivordner;
 /// maßgeblich ist immer das Maximum aus Zähler und höchster Nummer vorhandener Dateien,
 /// damit keine Nummer doppelt vergeben wird.
 public final class Archive: @unchecked Sendable {
@@ -46,6 +46,16 @@ public final class Archive: @unchecked Sendable {
         String(format: "%06d", number)
     }
 
+    /// Nummer im Dateinamen (eine Stelle mehr als in der Anzeige, z. B. „0000123“).
+    public static func fileNameNumber(_ number: Int) -> String {
+        String(format: "%07d", number)
+    }
+
+    /// Dateistamm ohne Titel (`2026-09-18-0000123`, auch ältere Form `2026-09-18_000123`) – gilt als Platzhalter-Titel.
+    public static func isFileStem(_ text: String) -> Bool {
+        text.wholeMatch(of: #/\d{4}-\d{2}-\d{2}[-_]\d{6,}/#) != nil
+    }
+
     public static func formatDate(_ date: Date) -> String {
         let f = DateFormatter()
         f.locale = Locale(identifier: "en_US_POSIX")
@@ -53,10 +63,10 @@ public final class Archive: @unchecked Sendable {
         return f.string(from: date)
     }
 
-    /// `JJJJ-MM-TT_NNNNNN.pdf` bzw. mit Titel `JJJJ-MM-TT_NNNNNN_Titel-als-Slug.pdf`.
+    /// `JJJJ-MM-TT-NNNNNNN.pdf` bzw. mit Titel `JJJJ-MM-TT-NNNNNNN-Titel-als-Slug.pdf`.
     public static func fileName(date: Date, number: Int, title: String = "") -> String {
         let slug = slug(title)
-        return "\(formatDate(date))_\(formatNumber(number))\(slug.isEmpty ? "" : "_" + slug).pdf"
+        return "\(formatDate(date))-\(fileNameNumber(number))\(slug.isEmpty ? "" : "-" + slug).pdf"
     }
 
     /// Dateinamen-tauglicher Titel: Umlaute bleiben, Sonderzeichen fliegen raus, Leerraum wird "-".
@@ -79,7 +89,7 @@ public final class Archive: @unchecked Sendable {
 
     /// Liest Datum und Nummer aus einem Archiv-Dateinamen, sonst nil.
     public static func parse(fileName: String) -> (date: Date, number: Int)? {
-        guard let match = fileName.wholeMatch(of: #/(\d{4}-\d{2}-\d{2})_(\d{6,})(?:_.+)?\.pdf/#),
+        guard let match = fileName.wholeMatch(of: #/(\d{4}-\d{2}-\d{2})[-_](\d{6,})(?:[-_].+)?\.pdf/#),
               let number = Int(match.2) else { return nil }
         let f = DateFormatter()
         f.locale = Locale(identifier: "en_US_POSIX")
@@ -165,7 +175,7 @@ public final class Archive: @unchecked Sendable {
         else { return }
         let attributes = pdf.documentAttributes ?? [:]
         var title = attributes[PDFDocumentAttribute.titleAttribute] as? String ?? ""
-        if title.wholeMatch(of: #/\d{4}-\d{2}-\d{2}_\d{6,}/#) != nil { title = "" }
+        if Archive.isFileStem(title) { title = "" }
         var summary = attributes[PDFDocumentAttribute.subjectAttribute] as? String ?? ""
         if summary.hasPrefix("Nr. ") { summary = "" }
         try writeMetadata(Archive.legacyMetadata(url: url, pdf: pdf, issues: issues), title: title, summary: summary, pdf: pdf, url: url)
@@ -191,7 +201,7 @@ public final class Archive: @unchecked Sendable {
         let parsed = Archive.parse(fileName: url.lastPathComponent)
         let attributes = pdf.documentAttributes ?? [:]
         let title = attributes[PDFDocumentAttribute.titleAttribute] as? String ?? ""
-        let hasTitle = !title.isEmpty && title.wholeMatch(of: #/\d{4}-\d{2}-\d{2}_\d{6,}/#) == nil
+        let hasTitle = !title.isEmpty && !Archive.isFileStem(title)
         let archivedAt = attributes[PDFDocumentAttribute.creationDateAttribute] as? Date
             ?? (try? url.resourceValues(forKeys: [.creationDateKey]).creationDate) ?? Date()
         let pages = (0..<pdf.pageCount).map { i -> DocumentMetadata.TextSource in

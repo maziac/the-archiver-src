@@ -51,7 +51,7 @@ FoundationModels **weak-linked**), `Archiver` (SwiftUI-App, Scanner, Eingangsord
 
 ### Core-Module (Sources/ArchiverCore)
 
-- `Archive` – Nummern, Dateinamen (`JJJJ-MM-TT_NNNNNN_Titel.pdf`), `save`, `updateMetadata`,
+- `Archive` – Nummern, Dateinamen (`JJJJ-MM-TT-NNNNNNN-Titel.pdf`), `save`, `updateMetadata`,
   `rearrange` (Seiten umsortieren/drehen), Migration von Altbestand. Threadsicher per Lock.
 - `ImportProcessor.process` – der zentrale Import-Ablauf: Duplikat (SHA-256) → Text/OCR je Seite →
   leere Seiten (`BlankPage`) → Seitenreihenfolge (`PageNumbering`) → Vorschlag (`Summarizer`) →

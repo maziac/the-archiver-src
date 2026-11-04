@@ -46,7 +46,7 @@ struct PDFBuilderTests {
         #expect(pdf.page(at: 1)?.string?.contains("000123") == false)
 
         let attrs = pdf.documentAttributes ?? [:]
-        #expect(attrs[PDFDocumentAttribute.titleAttribute] as? String == "2026-09-18_000123")
+        #expect(attrs[PDFDocumentAttribute.titleAttribute] as? String == "2026-09-18-0000123")
         #expect((attrs[PDFDocumentAttribute.keywordsAttribute] as? [String])?.contains("000123") == true)
         // JPEG-Einbettung hält die Datei klein
         #expect(data.count < 500_000)

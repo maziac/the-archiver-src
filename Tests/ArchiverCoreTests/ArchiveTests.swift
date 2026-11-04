@@ -8,7 +8,7 @@ struct ArchiveTests {
     let date = DateComponents(calendar: Calendar(identifier: .gregorian), year: 2026, month: 9, day: 18, hour: 12).date!
 
     @Test func fileNameFormat() {
-        #expect(Archive.fileName(date: date, number: 123) == "2026-09-18_000123.pdf")
+        #expect(Archive.fileName(date: date, number: 123) == "2026-09-18-0000123.pdf")
         let parsed = Archive.parse(fileName: "2026-09-18_000123.pdf")
         #expect(parsed?.number == 123)
         #expect(Archive.parse(fileName: "scan.pdf") == nil)
@@ -21,7 +21,7 @@ struct ArchiveTests {
         let second = try archive.save(date: date) { _ in Data("b".utf8) }
         #expect(first.number == 1)
         #expect(second.number == 2)
-        #expect(second.url.lastPathComponent == "2026-09-18_000002.pdf")
+        #expect(second.url.lastPathComponent == "2026-09-18-0000002.pdf")
     }
 
     @Test func existingFilesWinOverCounter() throws {
@@ -44,10 +44,14 @@ struct ArchiveTests {
 
     @Test func titleInFileName() {
         #expect(Archive.fileName(date: date, number: 7, title: "Stromrechnung Stadtwerke München 09/2026")
-                == "2026-09-18_000007_Stromrechnung-Stadtwerke-München-09-2026.pdf")
+                == "2026-09-18-0000007-Stromrechnung-Stadtwerke-München-09-2026.pdf")
         #expect(Archive.slug("  Kfz: Versicherung / \"Allianz\"  ") == "Kfz-Versicherung-Allianz")
         #expect(Archive.slug(String(repeating: "Wort ", count: 30)).count <= 60)
         #expect(Archive.parse(fileName: "2026-09-18_000007_Stromrechnung-Stadtwerke.pdf")?.number == 7)
+        #expect(Archive.parse(fileName: "2026-09-18-0000007-Stromrechnung-Stadtwerke.pdf")?.number == 7)
+        #expect(Archive.parse(fileName: "2026-09-18-0000007.pdf")?.number == 7)
+        #expect(Archive.parse(fileName: "2026-09-18-0000007-2025-Bericht.pdf")?.number == 7)
+        #expect(Archive.isFileStem("2026-09-18-0000007") && Archive.isFileStem("2026-09-18_000007"))
     }
 
     @Test func numbersCountAcrossTitledFiles() throws {
@@ -55,7 +59,7 @@ struct ArchiveTests {
         try Data().write(to: folder.appendingPathComponent("2026-01-01_000009_Irgendwas.pdf"))
         let saved = try archive.save(date: date, title: "Mietvertrag") { _ in Data() }
         #expect(saved.number == 10)
-        #expect(saved.url.lastPathComponent == "2026-09-18_000010_Mietvertrag.pdf")
+        #expect(saved.url.lastPathComponent == "2026-09-18-0000010-Mietvertrag.pdf")
     }
 
     @Test func updateMetadataRenamesAndKeepsText() async throws {
@@ -69,7 +73,7 @@ struct ArchiveTests {
         let newDate = DateComponents(calendar: Calendar(identifier: .gregorian), year: 2026, month: 8, day: 1, hour: 12).date!
 
         let newURL = try archive.updateMetadata(url: saved.url, date: newDate, title: "Stromrechnung SWM", summary: "Rechnung über Strom.").url
-        #expect(newURL.lastPathComponent == "2026-08-01_000001_Stromrechnung-SWM.pdf")
+        #expect(newURL.lastPathComponent == "2026-08-01-0000001-Stromrechnung-SWM.pdf")
         #expect(!FileManager.default.fileExists(atPath: saved.url.path))
 
         let pdf = try #require(PDFDocument(url: newURL))
