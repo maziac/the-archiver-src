@@ -47,7 +47,7 @@ struct SettingsView: View {
             } header: {
                 Text("Eingang")
             } footer: {
-                Text("Dateien in diesem Ordner werden automatisch archiviert und danach in den Papierkorb gelegt. Nicht verarbeitbare Dateien landen im Unterordner „Fehler“.")
+                Text("Dateien in diesem Ordner werden automatisch archiviert (gespeichert). Nicht verarbeitbare Dateien landen im Unterordner „Fehler“.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
