@@ -29,6 +29,17 @@ enum ScanSource: String, CaseIterable, Identifiable {
     var unitType: ICScannerFunctionalUnitType { self == .feeder ? .documentFeeder : .flatbed }
 }
 
+/// Was der Papiersensor im Einzug bisher gezeigt hat (je Scanner gemerkt). Viele Treiber melden ihn
+/// gar nicht oder nur beim Auswählen des Einzugs.
+enum FeederSensor: String {
+    /// noch keine Erfahrung
+    case unknown
+    /// hat eingelegtes Papier richtig gemeldet
+    case trusted
+    /// meldete „leer“, obwohl Blätter eingezogen wurden
+    case untrusted
+}
+
 /// Steuert Netzwerk-/USB-Scanner über ImageCaptureCore: Stapel über den Vorlageneinzug (ADF),
 /// einzelne Seiten wahlweise über Einzug oder Vorlagenglas.
 @Observable
@@ -46,6 +57,10 @@ final class ScannerService: NSObject {
     private static let log = Logger(subsystem: "de.local.archiver", category: "scanner")
     /// Seiten, die im laufenden Durchgang schon angekommen sind
     private(set) var pagesInCurrentScan = 0
+    /// Der Einzug kann beidseitig scannen (bekannt, sobald der Einzug einmal ausgewählt war)
+    private(set) var supportsDuplex = false
+    /// Letzte Meldung des Papiersensors im Einzug (nil = unbekannt oder Einzug nicht ausgewählt)
+    private(set) var feederLoaded: Bool?
 
     @ObservationIgnored private let browser = ICDeviceBrowser()
     @ObservationIgnored private var scannedURLs: [URL] = []
@@ -55,6 +70,11 @@ final class ScannerService: NSObject {
     @ObservationIgnored private var requestedUnit: ICScannerFunctionalUnitType?
     /// Seiten aus früheren Teilen desselben Stapels (für die Fortschrittsanzeige)
     @ObservationIgnored private var pageOffset = 0
+    /// Zählt Wechsel der Scanquelle, damit eine abgelaufene Wartezeit keinen neueren Wechsel abbricht
+    @ObservationIgnored private var unitRequest = 0
+    @ObservationIgnored private var loadedObservation: NSKeyValueObservation?
+    /// Der Treiber bestätigt das erneute Auswählen des schon aktiven Einzugs nicht
+    @ObservationIgnored private var reselectUnanswered = false
 
     override init() {
         super.init()
@@ -73,6 +93,10 @@ final class ScannerService: NSObject {
         selected = scanner
         isReady = false
         sources = []
+        supportsDuplex = false
+        feederLoaded = nil
+        loadedObservation = nil
+        reselectUnanswered = false
         statusText = "Verbinde mit \(scanner.name ?? "Scanner") …"
         scanner.delegate = self
         scanner.requestOpenSession()
@@ -84,14 +108,16 @@ final class ScannerService: NSObject {
     /// Treiber meldet den Auftrag dann ohne Fehler als beendet, und die danach eingezogenen Blätter
     /// kommen nie an. Ein erneuter Auftrag rettet sie nicht – sie müssen nachgescannt werden.
     /// - Parameter pagesBefore: bereits vorhandene Seiten dieses Durchgangs (nur für die Anzeige)
-    func scanFeeder(dpi: Int, color: Bool, into folder: URL, pagesBefore: Int = 0) async throws -> [URL] {
+    /// - Parameter duplex: beidseitig scannen (nur wirksam, wenn der Einzug es kann); die Seiten kommen dann
+    ///   normalerweise abwechselnd Vorder-/Rückseite.
+    func scanFeeder(dpi: Int, color: Bool, duplex: Bool = false, into folder: URL, pagesBefore: Int = 0) async throws -> [URL] {
         pageOffset = pagesBefore
         defer { pageOffset = 0 }
-        return try await scan(source: .feeder, dpi: dpi, color: color, into: folder)
+        return try await scan(source: .feeder, dpi: dpi, color: color, duplex: duplex, into: folder)
     }
 
     /// Scannt über die gewählte Quelle: beim Einzug alle eingelegten Blätter, beim Vorlagenglas eine A4-Seite.
-    func scan(source: ScanSource, dpi: Int, color: Bool, into folder: URL) async throws -> [URL] {
+    func scan(source: ScanSource, dpi: Int, color: Bool, duplex: Bool = false, into folder: URL) async throws -> [URL] {
         guard let scanner = selected else { throw ScannerError.noScanner }
         guard isReady else { throw ScannerError.notReady }
         guard continuation == nil, unitContinuation == nil else { throw ScannerError.busy }
@@ -113,6 +139,8 @@ final class ScannerService: NSObject {
         if let feeder = unit as? ICScannerFunctionalUnitDocumentFeeder {
             feeder.documentType = .typeA4
             unit.scanArea = NSRect(origin: .zero, size: feeder.documentSize)
+            if feeder.supportsDuplexScanning { feeder.duplexScanningEnabled = duplex }
+            Self.log.notice("Diagnose: Scan über Einzug, duplex angefordert=\(duplex, privacy: .public) gesetzt=\(feeder.duplexScanningEnabled, privacy: .public) duplexfähig=\(feeder.supportsDuplexScanning, privacy: .public) Papier=\(feeder.documentLoaded, privacy: .public)")
         } else if let flatbed = unit as? ICScannerFunctionalUnitFlatbed {
             flatbed.documentType = .typeA4
             // A4 ab der Anlegeecke, höchstens so groß wie das Glas
@@ -136,15 +164,60 @@ final class ScannerService: NSObject {
         }
     }
 
-    /// Wählt Einzug oder Vorlagenglas und wartet auf die Bestätigung des Scanners (höchstens 20 s).
-    private func selectUnit(_ type: ICScannerFunctionalUnitType, on scanner: ICScannerDevice) async throws {
+    /// Fragt den Papiersensor des Einzugs ab. Viele Treiber aktualisieren ihn nur beim Auswählen des Einzugs,
+    /// deshalb wird der Einzug (erneut) ausgewählt. nil = kein Einzug oder keine Auskunft.
+    func checkFeederPaper() async -> Bool? {
+        guard let scanner = selected, isReady, sources.contains(.feeder),
+              continuation == nil, unitContinuation == nil else { return nil }
+        let before = (scanner.selectedFunctionalUnit as? ICScannerFunctionalUnitDocumentFeeder)?.documentLoaded
+        let alreadySelected = scanner.selectedFunctionalUnit.type == .documentFeeder
+        if !(alreadySelected && reselectUnanswered) {
+            do {
+                try await selectUnit(.documentFeeder, on: scanner, timeout: alreadySelected ? 3 : 20)
+            } catch {
+                if alreadySelected { reselectUnanswered = true }
+                Self.log.notice("Diagnose: erneutes Auswählen des Einzugs unbeantwortet (\(error.localizedDescription, privacy: .public))")
+            }
+        }
+        let after = (scanner.selectedFunctionalUnit as? ICScannerFunctionalUnitDocumentFeeder)?.documentLoaded
+        Self.log.notice("Diagnose: Papiersensor vorher=\(before.map(String.init) ?? "–", privacy: .public) nach Auswahl=\(after.map(String.init) ?? "–", privacy: .public)")
+        statusText = "Bereit"
+        return after ?? before
+    }
+
+    /// Gelerntes Verhalten des Papiersensors des gewählten Scanners.
+    var feederSensor: FeederSensor {
+        guard let key = sensorKey else { return .unknown }
+        return FeederSensor(rawValue: UserDefaults.standard.string(forKey: key) ?? "") ?? .unknown
+    }
+
+    private var sensorKey: String? { selected.map { SettingsKey.feederSensorPrefix + ($0.name ?? "Scanner") } }
+
+    /// Merkt, ob der Papiersensor gestimmt hat: `reported` = Meldung vor dem Scan, `gotPages` = Blätter kamen an.
+    func recordFeederSensor(reported: Bool?, gotPages: Bool) {
+        guard let key = sensorKey else { return }
+        let old = feederSensor
+        var new = old
+        if gotPages, reported != true {
+            new = .untrusted  // meldete leer, obwohl Papier da war – dem Sensor nicht mehr trauen
+        } else if gotPages, reported == true, old == .unknown {
+            new = .trusted
+        }
+        Self.log.notice("Diagnose: Papiersensor gemeldet=\(reported.map(String.init) ?? "–", privacy: .public) Seiten=\(gotPages, privacy: .public) → \(new.rawValue, privacy: .public)")
+        if new != old { UserDefaults.standard.set(new.rawValue, forKey: key) }
+    }
+
+    /// Wählt Einzug oder Vorlagenglas und wartet auf die Bestätigung des Scanners.
+    private func selectUnit(_ type: ICScannerFunctionalUnitType, on scanner: ICScannerDevice, timeout: Double = 20) async throws {
+        unitRequest += 1
+        let request = unitRequest
         try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Void, Error>) in
             unitContinuation = cont
             requestedUnit = type
             scanner.requestSelect(type)
             Task { [weak self] in
-                try? await Task.sleep(for: .seconds(20))
-                guard let self, let pending = self.unitContinuation else { return }
+                try? await Task.sleep(for: .seconds(timeout))
+                guard let self, self.unitRequest == request, let pending = self.unitContinuation else { return }
                 self.unitContinuation = nil
                 self.statusText = "Bereit"
                 pending.resume(throwing: ScannerError.scanFailed("Der Scanner hat nicht auf den Wechsel der Scanquelle reagiert."))
@@ -227,6 +300,7 @@ extension ScannerService: ICScannerDeviceDelegate {
             guard scanner === selected else { return }
             let available = Set(scanner.availableFunctionalUnitTypes.map(\.uintValue))
             sources = ScanSource.allCases.filter { available.contains($0.unitType.rawValue) }
+            observeFeeder(error == nil ? functionalUnit : scanner.selectedFunctionalUnit)
             // Wechsel für einen Scan angefordert
             if let pending = unitContinuation {
                 unitContinuation = nil
@@ -245,6 +319,25 @@ extension ScannerService: ICScannerDeviceDelegate {
             } else if error == nil {
                 isReady = true
                 statusText = sources.contains(.feeder) ? "Bereit" : "Bereit (nur Vorlagenglas)"
+            }
+        }
+    }
+
+    /// Merkt Duplex-Fähigkeit und Papiersensor des Einzugs und schreibt sie ins Protokoll (Diagnose).
+    private func observeFeeder(_ unit: ICScannerFunctionalUnit) {
+        guard let feeder = unit as? ICScannerFunctionalUnitDocumentFeeder else {
+            feederLoaded = nil
+            loadedObservation = nil
+            return
+        }
+        supportsDuplex = feeder.supportsDuplexScanning
+        feederLoaded = feeder.documentLoaded
+        Self.log.notice("Diagnose: Einzug ausgewählt, duplexfähig=\(feeder.supportsDuplexScanning, privacy: .public) duplex aktiv=\(feeder.duplexScanningEnabled, privacy: .public) Papier=\(feeder.documentLoaded, privacy: .public) Sensor bisher=\(self.feederSensor.rawValue, privacy: .public)")
+        loadedObservation = feeder.observe(\.documentLoaded, options: [.new]) { [weak self] feeder, _ in
+            let loaded = feeder.documentLoaded
+            Task { @MainActor in
+                ScannerService.log.notice("Diagnose: Papiersensor meldet von sich aus \(loaded, privacy: .public)")
+                self?.feederLoaded = loaded
             }
         }
     }

@@ -58,7 +58,7 @@ struct ScanView: View {
 
     private var isBusy: Bool {
         switch session.phase {
-        case .scanningFronts, .scanningBacks, .scanningSingle, .processing, .analyzingStack: return true
+        case .checkingFeeder, .scanningFronts, .scanningBacks, .scanningSingle, .processing, .analyzingStack: return true
         default: return false
         }
     }
@@ -73,28 +73,32 @@ struct ScanView: View {
                 step: "Scannen",
                 icon: "doc.on.doc",
                 title: "Dokument scannen",
-                text: "Stapel: Blätter in den Einzug legen. Wenn der Drucker keinen Duplex-Scan unterstützt, kann der Stapel danach gewendet werden, um die Rückseiten zu scannen.\nSeite für Seite: für gebundene, empfindliche oder sehr unterschiedliche Blätter. Jede Seite wird einzeln gescannt.\nVorhandene PDFs oder Bilder einfach mit der Maus hierher oder in den Tab „Eingang“ ziehen.")
+                text: "Blätter in den Einzug oder eine Seite auf das Vorlagenglas legen und „Scannen“ wählen.\nVorhandene PDFs oder Bilder einfach mit der Maus hierher oder in den Tab „Eingang“ ziehen.")
             {
-                Button("Seite für Seite …") { session.scanSinglePage() }
-                    .help("Jede Seite einzeln scannen; nach jeder Seite wird gefragt, ob noch eine kommt")
-                    .disabled(!scanner.isReady || scanner.sources.isEmpty)
-                Button("Stapel scannen") { session.scanFronts() }
+                Button("Scannen") { session.startScan() }
                     .keyboardShortcut(.defaultAction)
-                    .help("Alle Blätter im Einzug scannen; beidseitige Blätter danach wenden")
-                    .disabled(!scanner.isReady || !scanner.sources.contains(.feeder))
+                    .help(plannedScan)
+                    .disabled(!canScan)
             } footer: {
                 VStack(spacing: 12) {
-                    splitToggle
-                    sourcePicker
+                    Text(plannedScan)
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                        .multilineTextAlignment(.center)
+                    scanOptions
+                    if session.scanMode != .flatbed { splitToggle }
                 }
             }
             .importDrop(inbox) { model.selectedTab = .inbox }  // beim Scannen sieht man den Fortschritt sonst nicht
 
-        case .scanningFronts, .scanningBacks, .scanningSingle:
+        case .checkingFeeder, .scanningFronts, .scanningBacks, .scanningSingle:
             VStack(spacing: 16) {
                 ProgressView()
                 Text(scanningTitle)
                     .font(.title2)
+                if let route = session.scanRoute, session.phase != .checkingFeeder {
+                    Text(route).foregroundStyle(.secondary)
+                }
                 Text("\(scanner.pagesInCurrentScan) Seite(n)")
                     .foregroundStyle(.secondary)
                     .monospacedDigit()
@@ -103,20 +107,37 @@ struct ScanView: View {
 
         case .awaitingFlip:
             Instruction(
-                step: "Schritt 2 von 2",
+                step: session.expectBacks ? "Schritt 2 von 2" : "Stapel gescannt",
                 icon: "arrow.triangle.2.circlepath",
-                title: "\(session.fronts.count) Vorderseite(n) gescannt – jetzt wenden",
+                title: session.expectBacks
+                    ? "\(session.fronts.count) Vorderseite(n) gescannt – jetzt wenden"
+                    : session.stackDuplex
+                        ? "\(session.stackSheetCount) Blatt beidseitig gescannt (\(session.fronts.count) Seiten)"
+                        : "\(session.fronts.count) Seite(n) gescannt",
                 text: (session.feederNote.map { "⚠︎ \($0)\n" } ?? "")
-                    + "Nimm den Stapel aus der Ablage, drehe ihn als Ganzes um (Reihenfolge nicht ändern!) und lege ihn wieder in den Einzug.\n"
-                    + "Stimmt die Zahl nicht, weil der Scanner vorzeitig aufgehört hat? Dann die übrigen Blätter (ohne die ersten \(session.fronts.count)) wieder einlegen und „Weitere Vorderseiten“ wählen.")
+                    + (session.stackDuplex ? ""
+                       : session.expectBacks
+                       ? "Nimm den Stapel aus der Ablage, drehe ihn als Ganzes um (Reihenfolge nicht ändern!) und lege ihn wieder in den Einzug.\n"
+                       : "Beidseitig bedruckt? Dann den Stapel als Ganzes umdrehen (Reihenfolge nicht ändern!), wieder einlegen und „Rückseiten scannen“ wählen.\n")
+                    + "Stimmt die Zahl nicht, weil der Scanner vorzeitig aufgehört hat? Dann die übrigen Blätter (ohne die ersten \(session.stackSheetCount)) wieder einlegen und „Weitere Seiten“ wählen.")
             {
-                Button("Weitere Vorderseiten") { session.scanMoreFronts() }
+                Button("Weitere Seiten") { session.scanMorePages() }
                     .help("Die noch nicht gescannten Blätter erneut einlegen; sie werden hinten angehängt")
                     .disabled(!scanner.isReady)
-                Button("Nur einseitig – fertig") { session.finishSimplex() }
-                Button("Rückseiten scannen") { session.scanBacks() }
-                    .keyboardShortcut(.defaultAction)
-                    .disabled(!scanner.isReady)
+                if session.stackDuplex {
+                    Button("Fertig") { session.finishStackScan() }
+                        .keyboardShortcut(.defaultAction)
+                } else if session.expectBacks {
+                    Button("Fertig") { session.finishStackScan() }
+                    Button("Rückseiten scannen") { session.scanBacks() }
+                        .keyboardShortcut(.defaultAction)
+                        .disabled(!scanner.isReady)
+                } else {
+                    Button("Fertig") { session.finishStackScan() }
+                        .keyboardShortcut(.defaultAction)
+                    Button("Rückseiten scannen") { session.scanBacks() }
+                        .disabled(!scanner.isReady)
+                }
             } footer: {
                 splitToggle
             }
@@ -152,7 +173,7 @@ struct ScanView: View {
                     ? "Seite \(session.pages.count) gescannt – noch eine?"
                     : "Seite konnte nicht gescannt werden",
                 text: session.singleError.map { "\($0)\nBisher \(session.pages.count) Seite(n)." }
-                    ?? "Lege die nächste Seite auf (\(session.singleSource.label)) und scanne sie – oder beende das Dokument.")
+                    ?? "Lege die nächste Seite auf (\(session.scanRoute ?? ScanSource.flatbed.label)) und scanne sie – oder beende das Dokument.")
             {
                 Button(session.pages.isEmpty ? "Abbrechen" : "Alles verwerfen", role: .destructive) { session.reset() }
                 if session.singleError == nil, !session.pages.isEmpty {
@@ -165,7 +186,6 @@ struct ScanView: View {
                     .disabled(!scanner.isReady)
             } footer: {
                 VStack(spacing: 12) {
-                    sourcePicker
                     if let last = session.pages.last {
                         Image(nsImage: last.thumbnail)
                             .resizable()
@@ -234,9 +254,70 @@ struct ScanView: View {
 
     private var scanningTitle: String {
         switch session.phase {
+        case .checkingFeeder: return "Einzug wird geprüft …"
         case .scanningFronts: return "Vorderseiten werden gescannt …"
         case .scanningBacks: return "Rückseiten werden gescannt …"
         default: return "Seite \(session.pages.count + 1) wird gescannt …"
+        }
+    }
+
+    private var canScan: Bool {
+        guard scanner.isReady, !scanner.sources.isEmpty else { return false }
+        switch session.scanMode {
+        case .auto: return true
+        case .batch: return scanner.sources.contains(.feeder)
+        case .flatbed: return scanner.sources.contains(.flatbed)
+        }
+    }
+
+    /// Optionen neben dem Scan-Button
+    private var scanOptions: some View {
+        Grid(alignment: .leading, verticalSpacing: 8) {
+            GridRow {
+                Text("Modus:").gridColumnAlignment(.trailing)
+                Picker("Modus", selection: $session.scanMode) {
+                    ForEach(ScanMode.allCases) { Text($0.label).tag($0) }
+                }
+                .help("Automatisch: Papier im Einzug → Stapel, sonst eine Seite vom Vorlagenglas")
+            }
+            GridRow {
+                Text("Duplex:")
+                Picker("Duplex", selection: $session.duplexMode) {
+                    ForEach(DuplexMode.allCases) { Text($0.label).tag($0) }
+                }
+                .help("Automatisch: beidseitig, wenn der Einzug es kann. Ein: ohne Duplex-Einzug den Stapel für die Rückseiten wenden. Aus: nur Vorderseiten.")
+                .disabled(session.scanMode == .flatbed || !scanner.sources.contains(.feeder))
+            }
+        }
+        .labelsHidden()
+        .pickerStyle(.segmented)
+        .fixedSize()
+    }
+
+    /// Was „Scannen“ mit den aktuellen Optionen tun wird
+    private var plannedScan: String {
+        let feeder: String
+        if scanner.supportsDuplex, session.duplexMode != .off {
+            feeder = "Einzug, beidseitig"
+        } else {
+            switch session.duplexMode {
+            case .off: feeder = "Einzug, einseitig"
+            case .on: feeder = "Einzug, danach Stapel wenden für die Rückseiten"
+            case .auto: feeder = "Einzug, einseitig (Rückseiten nach dem Wenden möglich)"
+            }
+        }
+        let hasFeeder = scanner.sources.contains(.feeder)
+        let hasGlass = scanner.sources.contains(.flatbed)
+        switch session.scanMode {
+        case .batch:
+            return hasFeeder ? feeder : "Dieser Scanner hat keinen Einzug."
+        case .flatbed:
+            return hasGlass ? "Seite für Seite über das Vorlagenglas" : "Dieser Scanner hat kein Vorlagenglas."
+        case .auto:
+            if !hasFeeder { return "Seite für Seite über Vorlagenglas" }
+            if !hasGlass { return feeder }
+            if scanner.feederLoaded == true { return "Papier im Einzug erkannt → \(feeder)" }
+            return "Papier im Einzug → \(feeder); sonst Vorlagenglas"
         }
     }
 
@@ -244,18 +325,6 @@ struct ScanView: View {
     private var splitToggle: some View {
         Toggle("Mehrere Dokumente im Stapel aufteilen", isOn: $session.splitStack)
             .help("Nach dem Scan werden Trennstellen zwischen den Briefen vorgeschlagen (zum Prüfen). Ein beidseitig leeres Blatt zwischen zwei Briefen trennt sicher.")
-    }
-
-    /// Quelle für „Seite für Seite“ – nur wenn der Scanner Einzug und Vorlagenglas hat.
-    @ViewBuilder
-    private var sourcePicker: some View {
-        if scanner.sources.count > 1 {
-            Picker("Seite für Seite über", selection: $session.singleSource) {
-                ForEach(scanner.sources) { Text($0.label).tag($0) }
-            }
-            .pickerStyle(.segmented)
-            .fixedSize()
-        }
     }
 }
 

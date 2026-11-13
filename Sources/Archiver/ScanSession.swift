@@ -38,6 +38,35 @@ struct ScannedPage: Identifiable {
     }
 }
 
+/// Scan-Modus: Stapel über den Einzug, Seite für Seite vom Vorlagenglas oder automatisch (Papier im
+/// Einzug → Stapel, sonst Vorlagenglas).
+enum ScanMode: String, CaseIterable, Identifiable {
+    case auto, batch, flatbed
+
+    var id: String { rawValue }
+    var label: String {
+        switch self {
+        case .auto: return "Automatisch"
+        case .batch: return "Stapel"
+        case .flatbed: return "Vorlagenglas"
+        }
+    }
+}
+
+/// Beidseitig scannen: automatisch (wenn der Einzug es kann), ein (sonst Stapel wenden) oder aus.
+enum DuplexMode: String, CaseIterable, Identifiable {
+    case auto, on, off
+
+    var id: String { rawValue }
+    var label: String {
+        switch self {
+        case .auto: return "Automatisch"
+        case .on: return "Ein"
+        case .off: return "Aus"
+        }
+    }
+}
+
 /// Führt durch den Scan: als Stapel in zwei Durchgängen (Vorderseiten → wenden → Rückseiten) oder
 /// Seite für Seite; danach Vorschau → Speichern.
 /// (Dateien werden über den Eingang vollautomatisch importiert, siehe `InboxService`.)
@@ -46,6 +75,8 @@ struct ScannedPage: Identifiable {
 final class ScanSession {
     enum Phase: Equatable {
         case ready
+        /// Automatik: Papiersensor des Einzugs wird abgefragt
+        case checkingFeeder
         case scanningFronts
         case awaitingFlip
         case scanningBacks
@@ -81,10 +112,25 @@ final class ScanSession {
     private(set) var fronts: [URL] = []
     private(set) var backs: [URL] = []
     var pages: [ScannedPage] = []
-    /// Quelle beim Scannen Seite für Seite (gemerkt)
-    var singleSource: ScanSource = ScanSource(rawValue: UserDefaults.standard.string(forKey: SettingsKey.singleSource) ?? "") ?? .flatbed {
-        didSet { UserDefaults.standard.set(singleSource.rawValue, forKey: SettingsKey.singleSource) }
+    /// Scan-Modus (gemerkt)
+    var scanMode: ScanMode = ScanMode(rawValue: UserDefaults.standard.string(forKey: SettingsKey.scanMode) ?? "") ?? .auto {
+        didSet { UserDefaults.standard.set(scanMode.rawValue, forKey: SettingsKey.scanMode) }
     }
+    /// Beidseitig scannen (gemerkt)
+    var duplexMode: DuplexMode = DuplexMode(rawValue: UserDefaults.standard.string(forKey: SettingsKey.duplexMode) ?? "") ?? .auto {
+        didSet { UserDefaults.standard.set(duplexMode.rawValue, forKey: SettingsKey.duplexMode) }
+    }
+    /// Stapel ohne Duplex-Einzug: Rückseiten werden erwartet (Duplex „Ein“) – sonst nur angeboten
+    private(set) var expectBacks = false
+    /// Woher gerade gescannt wird (Anzeige)
+    private(set) var scanRoute: String?
+    /// Der Stapel wurde beidseitig über den Duplex-Einzug gescannt; `fronts` enthält bis zum Abschluss alle
+    /// Seiten in Scanreihenfolge (Vorderseite, Rückseite, …)
+    private(set) var stackDuplex = false
+    /// Gescannte Blätter des Stapels (für Hinweise zum Nachlegen)
+    var stackSheetCount: Int { stackDuplex ? (fronts.count + 1) / 2 : fronts.count }
+    /// Rückseiten kamen vom Duplex-Einzug (Blattreihenfolge, nicht gedreht) statt vom gewendeten Stapel
+    @ObservationIgnored private var backsFromDuplex = false
     /// Fehler beim letzten Einzelscan (die bisherigen Seiten bleiben erhalten)
     private(set) var singleError: String?
     /// Hinweis nach „Weitere Vorderseiten scannen“
@@ -185,27 +231,131 @@ final class ScanSession {
 
     // MARK: Scannen
 
-    func scanFronts() {
-        phase = .scanningFronts
-        Task {
-            do {
-                fronts = try await scanner.scanFeeder(dpi: dpi, color: color, into: workFolder.appendingPathComponent("vorne"))
-                phase = fronts.isEmpty ? .failed("Es wurden keine Seiten gescannt. Liegt Papier im Einzug?") : .awaitingFlip
-            } catch {
-                phase = .failed(error.localizedDescription)
+    /// Der Scan-Button: wählt je nach Optionen Stapel oder Einzelseite.
+    func startScan() {
+        let sources = scanner.sources
+        switch scanMode {
+        case .batch:
+            scanStack(autoTry: false, reported: nil)
+        case .flatbed:
+            scanSinglePage()
+        case .auto:
+            if !sources.contains(.feeder) {
+                scanGlassAuto(feederError: nil)
+            } else if !sources.contains(.flatbed) {
+                scanStack(autoTry: false, reported: nil)
+            } else {
+                phase = .checkingFeeder
+                Task {
+                    let loaded = await scanner.checkFeederPaper()
+                    let sensor = scanner.feederSensor
+                    Self.log.notice("Automatik: Papier im Einzug=\(loaded.map(String.init) ?? "–", privacy: .public), Sensor \(sensor.rawValue, privacy: .public)")
+                    if loaded != true, sensor == .trusted {
+                        scanGlassAuto(feederError: nil)  // dem Sensor ist zu trauen: Einzug leer
+                    } else {
+                        // Papier gemeldet – oder Sensor unbekannt/unzuverlässig: Einzug versuchen, sonst Glas
+                        scanStack(autoTry: true, reported: loaded)
+                    }
+                }
             }
         }
     }
 
+    /// Scannt alle Blätter im Einzug, beidseitig, wenn der Einzug es kann und Duplex nicht aus ist.
+    /// - Parameter autoTry: Automatik – kommt nichts aus dem Einzug, wird das Vorlagenglas gescannt
+    private func scanStack(autoTry: Bool, reported: Bool?) {
+        let duplex = duplexMode != .off && scanner.supportsDuplex
+        expectBacks = duplexMode == .on && !duplex
+        scanRoute = duplex ? "Einzug, beidseitig" : "Einzug"
+        phase = .scanningFronts
+        Task {
+            var urls: [URL] = []
+            var failure: String?
+            do {
+                urls = try await scanner.scanFeeder(dpi: dpi, color: color, duplex: duplex,
+                                                    into: workFolder.appendingPathComponent("vorne"))
+            } catch {
+                failure = error.localizedDescription
+            }
+            if autoTry { scanner.recordFeederSensor(reported: reported, gotPages: !urls.isEmpty) }
+            guard !urls.isEmpty else {
+                if autoTry, scanner.sources.contains(.flatbed) {
+                    scanGlassAuto(feederError: failure)
+                } else {
+                    phase = .failed(failure ?? "Es wurden keine Seiten gescannt. Liegt Papier im Einzug?")
+                }
+                return
+            }
+            stackScanned(urls, duplex: duplex)
+        }
+    }
+
+    /// Stapel gescannt: weitere Seiten, Rückseiten (ohne Duplex) oder fertig.
+    private func stackScanned(_ urls: [URL], duplex: Bool) {
+        backsFromDuplex = false
+        stackDuplex = duplex
+        fronts = urls
+        backs = []
+        phase = .awaitingFlip
+    }
+
+    /// Duplex-Stapel in Vorder- und Rückseiten aufteilen (Vorderseite, Rückseite, Vorderseite, …).
+    private func splitDuplexPages() {
+        let urls = fronts
+        Self.log.notice("Duplex: \(urls.count) Seite(n) aus dem Einzug")
+        if urls.count % 2 == 0 {
+            fronts = stride(from: 0, to: urls.count, by: 2).map { urls[$0] }
+            backs = stride(from: 1, to: urls.count, by: 2).map { urls[$0] }
+            backsFromDuplex = true
+        } else {
+            // passt nicht zu Blättern (z. B. Treiber verwirft leere Seiten) – Scanreihenfolge beibehalten
+            Self.log.notice("Duplex: ungerade Seitenzahl – Seiten bleiben in Scanreihenfolge")
+            fronts = urls
+            backs = []
+        }
+    }
+
+    /// Automatik ohne Papier im Einzug: eine Seite vom Vorlagenglas; ist sie leer, liegt nirgends Papier.
+    private func scanGlassAuto(feederError: String?) {
+        singleError = nil
+        scanRoute = ScanSource.flatbed.label
+        phase = .scanningSingle
+        let folder = workFolder.appendingPathComponent("einzeln-\(UUID().uuidString.prefix(6))")
+        Task {
+            do {
+                let urls = try await scanner.scan(source: .flatbed, dpi: dpi, color: color, into: folder)
+                let blank = await Self.allBlank(urls)
+                Self.log.notice("Automatik: Vorlagenglas \(urls.count) Seite(n), leer=\(blank, privacy: .public)")
+                if blank {
+                    phase = .failed("Kein Papier gefunden – weder im Einzug noch auf dem Vorlagenglas."
+                                    + (feederError.map { "\n\nEinzug: \($0)" } ?? ""))
+                    return
+                }
+                pages += urls.map { ScannedPage(url: $0, kind: .single, rotation: 0) }
+                startAnalysis()
+            } catch {
+                singleError = error.localizedDescription
+            }
+            phase = .singleNext
+        }
+    }
+
+    nonisolated private static func allBlank(_ urls: [URL]) async -> Bool {
+        await Task.detached(priority: .userInitiated) { () -> Bool in
+            urls.allSatisfy { url in ImageTools.load(url).map { BlankPage.isBlank($0) } ?? true }
+        }.value
+    }
+
     /// Weitere Vorderseiten anhängen (der Scanner hat mitten im Stapel aufgehört; die übrigen Blätter
     /// legt der Benutzer erneut ein).
-    func scanMoreFronts() {
+    func scanMorePages() {
         feederNote = nil
         phase = .scanningFronts
         let folder = workFolder.appendingPathComponent("vorne-\(UUID().uuidString.prefix(6))")
         Task {
             do {
-                let more = try await scanner.scanFeeder(dpi: dpi, color: color, into: folder, pagesBefore: fronts.count)
+                let more = try await scanner.scanFeeder(dpi: dpi, color: color, duplex: stackDuplex,
+                                                        into: folder, pagesBefore: fronts.count)
                 fronts += more
                 if more.isEmpty { feederNote = "Es wurden keine weiteren Seiten gescannt." }
             } catch {
@@ -248,9 +398,10 @@ final class ScanSession {
         }
     }
 
-    /// Nur Vorderseiten verwenden (einseitige Dokumente).
-    func finishSimplex() {
+    /// Stapel ohne (weitere) Rückseiten abschließen; Duplex-Seiten werden dabei Blättern zugeordnet.
+    func finishStackScan() {
         backs = []
+        if stackDuplex { splitDuplexPages() }
         buildPreview()
     }
 
@@ -260,9 +411,11 @@ final class ScanSession {
 
     // MARK: Seite für Seite
 
-    /// Scannt eine weitere Seite und hängt sie hinten an (auch aus der Vorschau heraus).
+    /// Scannt eine weitere Seite vom Vorlagenglas und hängt sie hinten an (auch aus der Vorschau heraus).
+    /// Ohne Vorlagenglas kommt die Seite aus dem Einzug.
     func scanSinglePage() {
-        let source = scanner.sources.contains(singleSource) ? singleSource : (scanner.sources.first ?? singleSource)
+        let source: ScanSource = scanner.sources.contains(.flatbed) || scanner.sources.isEmpty ? .flatbed : .feeder
+        scanRoute = source.label
         singleError = nil
         phase = .scanningSingle
         let folder = workFolder.appendingPathComponent("einzeln-\(UUID().uuidString.prefix(6))")
@@ -296,7 +449,8 @@ final class ScanSession {
     func cancelScan() { scanner.cancelScan() }
 
     private func buildPreview() {
-        let rotateBacks = UserDefaults.standard.bool(forKey: SettingsKey.rotateBacks)
+        // Gewendeter Stapel: Rückseiten ggf. gedreht und in umgekehrter Reihenfolge; Duplex-Einzug: wie Blätter
+        let rotateBacks = !backsFromDuplex && UserDefaults.standard.bool(forKey: SettingsKey.rotateBacks)
         let frontPages = fronts.map { ScannedPage(url: $0, kind: .front, rotation: 0) }
         let backPages = backs.map { ScannedPage(url: $0, kind: .back, rotation: rotateBacks ? 180 : 0) }
         Summarizer.prewarm()
@@ -314,7 +468,7 @@ final class ScanSession {
         // Rückseiten, auf denen nur die Vorderseite durchscheint, gibt es auf dem Papier nicht
         phase = .processing("Rückseiten werden geprüft …")
         analysisTask = Task {
-            var backsInOrder: [ScannedPage?] = backPages.reversed()
+            var backsInOrder: [ScannedPage?] = backsFromDuplex ? backPages : backPages.reversed()
             for i in frontPages.indices {
                 if Task.isCancelled { return }
                 guard let back = backsInOrder[i] else { continue }
@@ -512,6 +666,10 @@ final class ScanSession {
         workFolder = ScanSession.newWorkFolder()
         fronts = []
         backs = []
+        backsFromDuplex = false
+        stackDuplex = false
+        expectBacks = false
+        scanRoute = nil
         pages = []
         ocrCache = [:]
         singleError = nil

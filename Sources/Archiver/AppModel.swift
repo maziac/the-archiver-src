@@ -13,7 +13,11 @@ enum SettingsKey {
     static let pageThumbHeight = "pageThumbHeight"
     static let defaultPageThumbHeight = 560.0
     static let pageThumbHeightRange = 200.0...1200.0
-    static let singleSource = "singleSource"
+    /// Scan-Optionen (rawValue von ScanMode / DuplexMode)
+    static let scanMode = "scanMode"
+    static let duplexMode = "duplexMode"
+    /// Gelerntes Verhalten des Papiersensors im Einzug, je Scanner (Präfix + Gerätename)
+    static let feederSensorPrefix = "feederSensor:"
     /// Stapel in mehrere Dokumente aufteilen
     static let splitStack = "splitStack"
     static let inboxPath = "inboxPath"
