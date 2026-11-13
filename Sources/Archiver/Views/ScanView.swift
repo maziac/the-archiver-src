@@ -73,7 +73,7 @@ struct ScanView: View {
                 step: "Scannen",
                 icon: "doc.on.doc",
                 title: "Dokument scannen",
-                text: "Stapel: Blätter mit den Vorderseiten nach oben in den Einzug legen, die erste Seite obenauf. Beidseitige Blätter werden danach gewendet und die Rückseiten gescannt.\nSeite für Seite: für gebundene, empfindliche oder sehr unterschiedliche Blätter.\nVorhandene PDFs oder Bilder einfach hierher oder in den Tab „Eingang“ ziehen.")
+                text: "Stapel: Blätter in den Einzug legen. Wenn der Drucker keinen Duplex-Scan unterstützt, kann der Stapel danach gewendet werden, um die Rückseiten zu scannen.\nSeite für Seite: für gebundene, empfindliche oder sehr unterschiedliche Blätter. Jede Seite wird einzeln gescannt.\nVorhandene PDFs oder Bilder einfach mit der Maus hierher oder in den Tab „Eingang“ ziehen.")
             {
                 Button("Seite für Seite …") { session.scanSinglePage() }
                     .help("Jede Seite einzeln scannen; nach jeder Seite wird gefragt, ob noch eine kommt")
